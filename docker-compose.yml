@@ -1,0 +1,28 @@
+services:
+  orcai-mcp:
+    build: .
+    container_name: orcai-mcp-${PROJECT_NAME:-default}
+    ports:
+      - "${PORT:-8100}:8100"
+    volumes:
+      - ./data:/data
+      - ./workspace:/workspace
+      - ./skills:/skills
+      - ${PROJECT_DIR:-.}:/project
+    environment:
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
+      - MCP_AUTH_DISABLED=${MCP_AUTH_DISABLED:-true}
+      - IDE_TARGET=${IDE_TARGET:-claude}
+      - MAX_CONCURRENT_AGENTS=${MAX_CONCURRENT_AGENTS:-3}
+      - TASK_QUEUE_SIZE=${TASK_QUEUE_SIZE:-20}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DATA_DIR=/data
+      - WORKSPACE_DIR=/workspace
+      - SKILLS_DIR=/skills
+      - PROJECT_DIR=/project
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

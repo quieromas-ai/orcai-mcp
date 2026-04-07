@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.egg-info
+.env
+data/
+workspace/
+spec/
+tests/
+ui/node_modules/
+ui/build/
+*.md
