@@ -436,6 +436,24 @@ orcai-mcp up --local
 
 The test suite covers MCP tools, task engine concurrency, graceful shutdown, retry logic, REST API, skill manager, and CLI. Tests use an in-memory SQLite database and mock the agent runner by default. The end-to-end CLI test (`test_cli_runner_end_to_end_with_system_prompt`) is automatically skipped if `claude` is not installed.
 
+### Dev container
+
+`orcai-mcp init` can scaffold a `.devcontainer/` directory so you can develop inside a fully configured container in VS Code or Cursor without setting up Python or Node locally:
+
+```bash
+orcai-mcp init --ide claude --devcontainer
+```
+
+This generates `.devcontainer/devcontainer.json` with:
+
+- Python 3.12 slim image + Node 20 (for the React UI)
+- Port 8100 forwarded to the host
+- `pip install -e '.[dev]'` run automatically on container start
+- Local-dev environment variables pre-set (`DATA_DIR=./data`, `MCP_AUTH_DISABLED=true`, etc.)
+- VS Code / Cursor extensions: Python, Pylance, Ruff, mypy
+
+Open the cloned folder in VS Code or Cursor and choose **Reopen in Container** (or **Dev Containers: Open Folder in Container** from the command palette). The container starts, installs dependencies, and you're ready to run `orcai-mcp up --local`.
+
 ---
 
 ## Contributing
@@ -454,7 +472,7 @@ Bug reports and feature requests via [GitHub Issues](https://github.com/quieroma
 ## Roadmap
 
 - [ ] `--ssl-certfile` / `--ssl-keyfile` flags on `orcai-mcp up --local`
-- [ ] Dev container scaffolding (`orcai-mcp init` generates `.devcontainer/`)
+- [x] Dev container scaffolding (`orcai-mcp init --devcontainer` generates `.devcontainer/`)
 - [ ] Agent-to-agent delegation
 - [ ] Multi-model support (OpenAI, Ollama)
 - [ ] Webhook / Slack completion events

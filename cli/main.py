@@ -25,9 +25,50 @@ def cli(ctx: click.Context, url: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+_DEVCONTAINER_JSON = {
+    "name": "orcai-mcp dev",
+    "image": "python:3.12-slim",
+    "features": {
+        "ghcr.io/devcontainers/features/node:1": {"version": "20"},
+        "ghcr.io/devcontainers/features/git:1": {},
+    },
+    "forwardPorts": [8100],
+    "postCreateCommand": "pip install -e '.[dev]'",
+    "remoteEnv": {
+        "PORT": "8100",
+        "MCP_AUTH_DISABLED": "true",
+        "IDE_TARGET": "claude",
+        "MAX_CONCURRENT_AGENTS": "3",
+        "TASK_QUEUE_SIZE": "20",
+        "DATA_DIR": "./data",
+        "WORKSPACE_DIR": "./workspace",
+        "SKILLS_DIR": "./skills",
+        "PROJECT_DIR": ".",
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "charliermarsh.ruff",
+                "ms-python.mypy-type-checker",
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "[python]": {
+                    "editor.formatOnSave": True,
+                    "editor.defaultFormatter": "charliermarsh.ruff",
+                },
+            },
+        }
+    },
+}
+
+
 @cli.command()
 @click.option("--ide", type=click.Choice(["claude", "cursor"]), default="claude", show_default=True)
-def init(ide: str) -> None:
+@click.option("--devcontainer", is_flag=True, default=False, help="Scaffold .devcontainer/ for VS Code / Cursor dev containers")
+def init(ide: str, devcontainer: bool) -> None:
     """Initialise project artifact directories for Claude Code or Cursor."""
     base = f".{ide}"
     dirs = [
@@ -39,6 +80,18 @@ def init(ide: str) -> None:
         os.makedirs(d, exist_ok=True)
         click.echo(f"  created {d}/")
     click.echo(f"\nInitialised {ide.upper()} artifact directories in {base}/")
+
+    if devcontainer:
+        dc_dir = ".devcontainer"
+        os.makedirs(dc_dir, exist_ok=True)
+        dc_path = os.path.join(dc_dir, "devcontainer.json")
+        with open(dc_path, "w") as f:
+            json.dump(_DEVCONTAINER_JSON, f, indent=2)
+            f.write("\n")
+        click.echo(f"  created {dc_path}")
+        click.echo("\nDev container ready. Open this folder in VS Code or Cursor and")
+        click.echo("select 'Reopen in Container' to start a fully configured dev environment.")
+
     click.echo("Next: run 'orcai-mcp up' then 'orcai-mcp register'")
 
 
