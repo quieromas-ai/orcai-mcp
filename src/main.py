@@ -63,8 +63,9 @@ _ui_build = os.path.join(os.path.dirname(__file__), "..", "ui", "build")
 if os.path.isdir(_ui_build):
     app.mount("/ui", StaticFiles(directory=_ui_build, html=True), name="ui")
 
-# Mount FastMCP Streamable HTTP on /mcp
-app.mount("/mcp", mcp.streamable_http_app())
+# Mount FastMCP Streamable HTTP at root so the sub-app's internal /mcp route
+# is reachable. FastAPI routes (/health, /api/v1/*, /ui) take precedence.
+app.mount("/", mcp.streamable_http_app())
 
 
 def main() -> None:
