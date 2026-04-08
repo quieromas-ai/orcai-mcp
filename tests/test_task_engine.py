@@ -1,4 +1,6 @@
 import asyncio
+import os
+import shutil
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -105,3 +107,47 @@ async def test_cli_runner_used_when_configured(db_path, mock_cli_runner) -> None
         await engine.stop()
 
     mock_cli_runner.assert_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not installed")
+async def test_cli_runner_end_to_end_with_system_prompt(db_path) -> None:
+    """Real claude binary: CLI-mode task with system prompt completes without error."""
+    import src.mcp_server as mcp_module
+    import src.task_engine as te_module
+    from src.database import get_db
+    from src.mcp_server import add_agent, delegate_task
+
+    agent = await add_agent(
+        name="E2ECliBot",
+        role="assistant",
+        system_prompt="You are a helpful assistant. Reply very briefly.",
+        config={"runner": "cli"},
+    )
+
+    # conftest sets ANTHROPIC_API_KEY=test-key; the subprocess must not inherit it
+    # or the real claude CLI fails with "Invalid API key" instead of using OAuth.
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        engine = TaskEngine()
+        with patch.object(te_module, "task_engine", engine), \
+             patch.object(mcp_module, "task_engine", engine):
+            engine.start()
+            result = await delegate_task(
+                agent_id=agent["id"],
+                description="Say the word 'hello' and nothing else.",
+                priority=3,
+            )
+            task_id = result["task_id"]
+            row = None
+            for _ in range(60):
+                await asyncio.sleep(0.5)
+                db = await get_db()
+                async with db.execute("SELECT status FROM tasks WHERE id=?", (task_id,)) as cur:
+                    row = await cur.fetchone()
+                if row and row[0] in ("completed", "failed"):
+                    break
+            await engine.stop()
+
+    assert row is not None
+    assert row[0] == "completed", f"Task ended with status: {row[0]}"

@@ -97,7 +97,7 @@ class CLIAgentRunner(BaseAgentRunner):
             "--model", agent.get("model_preference", "claude-sonnet-4-6"),
         ]
         if system_prompt_path:
-            cmd += ["--system", system_prompt_path]
+            cmd += ["--system-prompt-file", system_prompt_path]
 
         env = {**os.environ, "WORKSPACE": workspace_dir}
 
