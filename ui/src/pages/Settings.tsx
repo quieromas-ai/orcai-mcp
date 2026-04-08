@@ -16,7 +16,7 @@ export function Settings() {
   const [testResult, setTestResult] = useState<HealthData | null>(null)
   const [testError, setTestError] = useState<string | null>(null)
 
-  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8100'
+  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? window.location.origin
   const mcpUrl = `${baseUrl}/mcp`
 
   const { data: health } = useQuery({
