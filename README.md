@@ -47,14 +47,14 @@ Anthropic API  /  Claude Code CLI subprocess
 ## Requirements
 
 - Docker and Docker Compose **or** Python 3.12+
-- An [Anthropic API key](https://console.anthropic.com/) (for `runner: api` mode)
-- Claude Code CLI installed (for `runner: cli` mode)
+- An [Anthropic API key](https://console.anthropic.com/) (for `runner: api` mode) **or** Claude Code CLI authenticated (for `runner: cli` mode — no API key needed)
+- Podman + podman-compose work as a drop-in replacement for Docker — see [notes below](#podman)
 
 ---
 
-## Quick start (Docker)
+## Quick start (local, no Docker)
 
-The fastest path from zero to a running server.
+The simplest path, especially on macOS. No API key required if you use `runner: cli` mode with an existing Claude Code login.
 
 **1. Clone and enter the repo**
 
@@ -63,80 +63,174 @@ git clone https://github.com/quieromas-ai/orcai-mcp.git
 cd orcai-mcp
 ```
 
-**2. Copy the example env file**
+**2. Create a virtual environment and install**
+
+> **macOS note:** macOS 3.12+ ships as an externally-managed Python. Always use a virtual environment — running `pip install` without one will be rejected.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+```
+
+**3. Configure**
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and set your Anthropic API key:
+Open `.env`. The defaults work out of the box for local use. Key settings:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
+# Leave blank if using runner: cli mode with Claude Code login
+ANTHROPIC_API_KEY=
+
+# Keep paths local to the project folder (not Docker volume paths)
+DATA_DIR=./data
+WORKSPACE_DIR=./workspace
+SKILLS_DIR=./skills
+PROJECT_DIR=.
+
+# Auth disabled for local dev — fine as-is
+MCP_AUTH_DISABLED=true
 ```
 
-Authentication is disabled by default for local use (`MCP_AUTH_DISABLED=true`). To enable it, set `MCP_AUTH_TOKEN` to a secret string and set `MCP_AUTH_DISABLED=false`.
+**4. Initialise project structure and start**
 
-**3. Start the server**
+Open two terminals. In the first:
 
 ```bash
-docker compose up -d
+source .venv/bin/activate
+orcai-mcp init --ide claude
+orcai-mcp up --local
 ```
 
-The server starts on `http://localhost:8100`. Check it is healthy:
+You should see:
+
+```
+{"message": "Starting orcai-mcp server"}
+{"message": "Database and task engine initialised"}
+INFO: Uvicorn running on http://0.0.0.0:8100
+```
+
+Verify it's healthy in the second terminal:
 
 ```bash
 curl http://localhost:8100/health
 # {"status":"ok","agents":0,"queue_depth":0}
 ```
 
-Open the dashboard at **http://localhost:8100/ui**.
-
-**4. Register with your IDE**
-
-From your project directory:
+**5. Register with Claude Code**
 
 ```bash
-pip install orcai-mcp       # or: pipx install orcai-mcp
-orcai-mcp init --ide claude  # creates .claude/agents/ structure
-orcai-mcp register           # writes .mcp.json
+source .venv/bin/activate
+orcai-mcp register
 ```
 
-For Cursor:
+This writes `.mcp.json` to your project root. Then explicitly add the server to Claude Code:
 
 ```bash
-orcai-mcp init --ide cursor
-orcai-mcp register --ide cursor  # writes .cursor/mcp.json
-```
-
-**5. Verify the connection**
-
-In Claude Code:
-
-```bash
+claude mcp add --transport http orcai-mcp http://localhost:8100/mcp
 claude mcp list
-# agent-manager  http://localhost:8100/mcp  connected
+# orcai-mcp: http://localhost:8100/mcp (HTTP) - ✓ Connected
 ```
 
-In Cursor: **Settings → Tools & MCP** — `orcai-mcp` should show as connected.
+> **Note:** `orcai-mcp register` writes `.mcp.json` but Claude Code may not pick it up automatically. Running `claude mcp add` explicitly is the reliable path.
+
+> **Note:** Use the URL without a trailing slash (`/mcp`, not `/mcp/`). Claude Code does not follow the redirect.
 
 ---
 
-## Quick start (local, no Docker)
+## Quick start (Docker)
 
-If you prefer to run without Docker:
+**1. Clone and configure**
 
 ```bash
 git clone https://github.com/quieromas-ai/orcai-mcp.git
 cd orcai-mcp
-
-pip install -e ".[dev]"      # or: uv pip install -e ".[dev]"
-cp .env.example .env         # set ANTHROPIC_API_KEY
-
-orcai-mcp up --local         # starts uvicorn directly
+cp .env.example .env
+# edit .env and set ANTHROPIC_API_KEY
 ```
 
-Data is stored in `/data` by default. Override with `DATA_DIR=./data` in `.env`.
+**2. Start**
+
+```bash
+docker compose up -d
+```
+
+**3. Register with your IDE**
+
+```bash
+pip install orcai-mcp   # install CLI only — not the server
+orcai-mcp init --ide claude
+claude mcp add --transport http orcai-mcp http://localhost:8100/mcp
+claude mcp list
+# orcai-mcp: http://localhost:8100/mcp (HTTP) - ✓ Connected
+```
+
+Open the dashboard at **http://localhost:8100/ui**.
+
+### Podman
+
+Podman works as a drop-in replacement. Substitute `podman compose` wherever the docs say `docker compose`:
+
+```bash
+podman compose up -d
+podman compose down
+```
+
+The `>>>>` message that appears before podman-compose output is informational noise from Podman's external compose provider — not an error.
+
+---
+
+## Running without an API key (Claude Code native auth)
+
+If you have Claude Code installed and authenticated via your Anthropic account, you can run agents without an API key at all. Set `runner: cli` when creating agents:
+
+```bash
+# .env — leave ANTHROPIC_API_KEY blank
+ANTHROPIC_API_KEY=
+```
+
+When delegating tasks, agents are spawned as Claude Code CLI subprocesses and inherit your existing OAuth session. No charges to an API key, no separate credential to manage.
+
+> **Requirement:** The `claude` CLI must be installed and `claude --version` must return a version number. The local path (no Docker) is required for this mode — the Docker container does not have the Claude Code CLI installed.
+
+---
+
+## Connecting to Claude desktop app (Cowork / Claude.ai)
+
+The Claude desktop app requires HTTPS for HTTP-type MCP servers. For local use, `mkcert` creates a locally-trusted certificate with no public exposure:
+
+```bash
+brew install mkcert
+mkcert -install      # adds a local CA to macOS keychain (one-time)
+mkcert localhost     # generates localhost.pem + localhost-key.pem
+```
+
+Start the server with TLS instead of `orcai-mcp up --local`:
+
+```bash
+source .venv/bin/activate
+uvicorn src.main:app --host 0.0.0.0 --port 8100 \
+  --ssl-certfile localhost.pem \
+  --ssl-keyfile localhost-key.pem
+```
+
+Then in `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "orcai-mcp": {
+      "type": "http",
+      "url": "https://localhost:8100/mcp"
+    }
+  }
+}
+```
+
+Restart the Claude desktop app. The connection is fully local — no tunnel, no public URL.
 
 ---
 
@@ -281,13 +375,53 @@ orcai-mcp register --url https://mcp.yourserver.com --token <your-token>
 
 ---
 
+## Troubleshooting
+
+**`orcai-mcp` not showing in `claude mcp list` after `register`**
+
+`orcai-mcp register` writes `.mcp.json` but Claude Code may not pick it up automatically from the file. Add it explicitly:
+
+```bash
+claude mcp add --transport http orcai-mcp http://localhost:8100/mcp
+```
+
+**`✗ Failed to connect` in `claude mcp list`**
+
+Check two things: the server is running (`curl http://localhost:8100/health` returns `ok`), and the registered URL has no trailing slash — `http://localhost:8100/mcp` not `http://localhost:8100/mcp/`.
+
+**`error: externally-managed-environment` when running `pip install`**
+
+You're using a system-managed Python (common on macOS with Homebrew). Use a virtual environment:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+**Claude desktop app rejects `http://localhost` with an HTTPS error**
+
+The Claude desktop app enforces HTTPS for MCP servers. Use `mkcert` to create a locally-trusted certificate — see [Connecting to Claude desktop app](#connecting-to-claude-desktop-app-cowork--claudeai) above.
+
+**`DATA_DIR=/data: No such file or directory` on local install**
+
+The default `DATA_DIR` is `/data`, which is a Docker volume path. For local installs, override it in `.env`:
+
+```bash
+DATA_DIR=./data
+WORKSPACE_DIR=./workspace
+SKILLS_DIR=./skills
+PROJECT_DIR=.
+```
+
+---
+
 ## Development
 
 ```bash
 git clone https://github.com/quieromas-ai/orcai-mcp.git
 cd orcai-mcp
 
-# Install with dev dependencies
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Run quality checks
@@ -296,7 +430,7 @@ mypy src/ cli/
 pytest
 
 # Start locally
-cp .env.example .env   # set ANTHROPIC_API_KEY
+cp .env.example .env
 orcai-mcp up --local
 ```
 
@@ -319,6 +453,7 @@ Bug reports and feature requests via [GitHub Issues](https://github.com/quieroma
 
 ## Roadmap
 
+- [ ] `--ssl-certfile` / `--ssl-keyfile` flags on `orcai-mcp up --local`
 - [ ] Dev container scaffolding (`orcai-mcp init` generates `.devcontainer/`)
 - [ ] Agent-to-agent delegation
 - [ ] Multi-model support (OpenAI, Ollama)
