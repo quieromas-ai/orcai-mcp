@@ -136,8 +136,10 @@ async def test_ui_served(async_client: AsyncClient) -> None:
     build_dir = os.path.join(os.path.dirname(__file__), "..", "ui", "build")
     if not os.path.isdir(build_dir):
         pytest.skip("UI build not present")
-    r = await async_client.get("/ui")
-    assert r.status_code in (200, 307, 308)  # may redirect to /ui/
+    # The MCP catch-all mount at "/" intercepts "/ui" before Starlette's
+    # redirect_slashes can redirect it to "/ui/", so request "/ui/" directly.
+    r = await async_client.get("/ui/")
+    assert r.status_code == 200
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,11 @@ from src.task_engine import task_engine
 configure_logging()
 logger = logging.getLogger(__name__)
 
+# Initialise the FastMCP sub-app at import time so the session manager exists
+# before the lifespan runs. FastAPI does not invoke a mounted sub-app's own
+# lifespan, so we drive session_manager.run() from our lifespan instead.
+_mcp_http_app = mcp.streamable_http_app()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -27,7 +32,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_database(db_path)
     task_engine.start()
     logger.info("Database and task engine initialised")
-    yield
+    async with mcp.session_manager.run():
+        yield
     logger.info("Shutting down orcai-mcp server")
     await task_engine.stop()
     await close_database()
@@ -63,9 +69,9 @@ _ui_build = os.path.join(os.path.dirname(__file__), "..", "ui", "build")
 if os.path.isdir(_ui_build):
     app.mount("/ui", StaticFiles(directory=_ui_build, html=True), name="ui")
 
-# Mount FastMCP Streamable HTTP at root so the sub-app's internal /mcp route
+# Mount the pre-initialised FastMCP sub-app at root so its internal /mcp route
 # is reachable. FastAPI routes (/health, /api/v1/*, /ui) take precedence.
-app.mount("/", mcp.streamable_http_app())
+app.mount("/", _mcp_http_app)
 
 
 def main() -> None:

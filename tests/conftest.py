@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
@@ -40,8 +41,31 @@ async def async_client(db_path) -> AsyncIterator[AsyncClient]:
     with patch.object(te_module, "task_engine", fresh_engine), \
          patch.object(mcp_module, "task_engine", fresh_engine):
         from src.main import app
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            yield client
+        # The FastAPI lifespan is not triggered by ASGITransport, so drive
+        # session_manager.run() manually. anyio cancel scopes must be entered
+        # and exited in the same asyncio task, so we run the session manager in
+        # a dedicated background task and signal it to stop after each test.
+        sm = mcp_module.mcp.session_manager
+        # StreamableHTTPSessionManager.run() can only be called once per
+        # instance; reset the private flag so each test gets a fresh run.
+        sm._has_started = False
+        stop_event: asyncio.Event = asyncio.Event()
+        ready_event: asyncio.Event = asyncio.Event()
+
+        async def _run_sm() -> None:
+            async with sm.run():
+                ready_event.set()
+                await stop_event.wait()
+
+        sm_task = asyncio.create_task(_run_sm())
+        await ready_event.wait()
+
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                yield client
+        finally:
+            stop_event.set()
+            await asyncio.gather(sm_task, return_exceptions=True)
 
     await fresh_engine.stop()
 
