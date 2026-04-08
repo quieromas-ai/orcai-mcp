@@ -141,7 +141,7 @@ class TaskEngine:
             )
             await db.commit()
 
-            workspace_dir = os.path.join(settings.workspace_dir, agent["id"])
+            workspace_dir = os.path.abspath(os.path.join(settings.workspace_dir, agent["id"]))
             os.makedirs(workspace_dir, exist_ok=True)
 
             try:

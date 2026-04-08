@@ -94,6 +94,7 @@ class CLIAgentRunner(BaseAgentRunner):
         cmd = [
             "claude",
             "--print",
+            "--dangerously-skip-permissions",
             "--model", agent.get("model_preference", "claude-sonnet-4-6"),
         ]
         if system_prompt_path:

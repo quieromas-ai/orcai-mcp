@@ -318,7 +318,7 @@ orcai-mcp supports two ways to run agents. Set `runner` in the agent's `config` 
 add_agent(name="API Agent", role="...", config={"runner": "api"})
 ```
 
-**`cli`** — spawns Claude Code as a subprocess. Gives the agent full access to the filesystem, terminal, and any tools Claude Code supports. Requires the `claude` CLI to be installed and authenticated in the execution environment.
+**`cli`** — spawns Claude Code as a subprocess. Gives the agent full access to the filesystem, terminal, and any tools Claude Code supports. Requires the `claude` CLI to be installed and authenticated in the execution environment. Agents run with `--dangerously-skip-permissions` so they do not block on interactive prompts — only use this mode in trusted, sandboxed environments.
 
 ```python
 add_agent(name="CLI Agent", role="...", config={"runner": "cli"})
@@ -425,9 +425,9 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Run quality checks
-ruff check src/ cli/
-mypy src/ cli/
-pytest
+uv run ruff check src/ cli/
+uv run mypy src/ cli/
+uv run pytest
 
 # Start locally
 cp .env.example .env
