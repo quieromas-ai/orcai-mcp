@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     workspace_dir: str = "/workspace"
     skills_dir: str = "/skills"
     project_dir: str = "/project"
+    # Comma-separated list of allowed Host header values for DNS rebinding protection.
+    # Leave empty to disable the protection (e.g. when behind a trusted reverse proxy).
+    mcp_allowed_hosts: str = ""
 
 
 settings = Settings()

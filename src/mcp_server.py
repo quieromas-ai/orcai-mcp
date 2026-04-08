@@ -5,15 +5,24 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
+from src.config import settings
 from src.database import get_db, parse_json_fields, row_to_dict
 from src.skill_manager import get_skills
 from src.skill_manager import install_skill as _install_skill
 from src.task_engine import QueueFullError, task_engine
 
+_allowed_hosts = [h.strip() for h in settings.mcp_allowed_hosts.split(",") if h.strip()]
+_transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=bool(_allowed_hosts),
+    allowed_hosts=_allowed_hosts,
+)
+
 mcp = FastMCP(
     "orcai-mcp",
     instructions="Manage sub-agents, delegate tasks, install skills",
+    transport_security=_transport_security,
 )
 
 

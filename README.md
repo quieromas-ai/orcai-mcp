@@ -305,6 +305,47 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `WORKSPACE_DIR` | `/workspace` | Agent working directories |
 | `SKILLS_DIR` | `/skills` | Installed skill Markdown files |
 | `PROJECT_DIR` | `.` | Project root (artifacts written here) |
+|| `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated allowed `Host` header values for DNS rebinding protection. Required when behind a reverse proxy — set to your public domain (e.g. `mcp.yourserver.com`). Empty disables the check. |
+
+---
+
+## Deploying behind a reverse proxy (nginx + TLS)
+
+When orcai-mcp runs behind nginx, two things must be configured correctly.
+
+**1. Set `MCP_ALLOWED_HOSTS` to your public domain**
+
+The MCP SDK validates the `Host` header on every request to prevent DNS rebinding attacks. By default the allowed list is empty, which disables the check. When your domain is public you should enable it:
+
+```bash
+# .env
+MCP_ALLOWED_HOSTS=mcp.yourserver.com
+```
+
+If this is not set and the server is behind a proxy forwarding `Host: your-domain.com`, every MCP request will be rejected with HTTP 421.
+
+**2. nginx must forward the original `Host` header**
+
+```nginx
+proxy_set_header Host $host;
+```
+
+Do **not** rewrite it to `localhost` — the SDK validates the header after nginx passes it through.
+
+**3. Allow Anthropic's outbound IPs on the `/mcp` location**
+
+Claude Code and Claude.ai make MCP tool calls from Anthropic's infrastructure, not the user's machine. Add their outbound CIDR alongside your own IP:
+
+```nginx
+location /mcp {
+    allow <your-ip>;
+    allow 160.79.104.0/21;   # Anthropic outbound — https://platform.claude.com/docs/en/api/ip-addresses
+    deny all;
+    ...
+}
+```
+
+A complete example nginx config is in `examples/nginx/remote.conf`.
 
 ---
 
