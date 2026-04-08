@@ -11,7 +11,7 @@ async def test_submit_and_queue_depth() -> None:
     engine = TaskEngine()
     engine.start()
     with patch("src.agent_runner.APIAgentRunner.run", new_callable=AsyncMock) as m:
-        m.return_value = "ok"
+        m.return_value = ("ok", 0)
         await engine.submit("task-1", priority=3)
         await engine.submit("task-2", priority=5)
     await engine.stop()

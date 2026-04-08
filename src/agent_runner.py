@@ -23,8 +23,8 @@ class BaseAgentRunner(ABC):
         task_description: str,
         input_context: dict[str, Any],
         workspace_dir: str,
-    ) -> str:
-        """Execute task and return result as string."""
+    ) -> tuple[str, int]:
+        """Execute task and return (result_text, tokens_used)."""
 
 
 class APIAgentRunner(BaseAgentRunner):
@@ -36,7 +36,7 @@ class APIAgentRunner(BaseAgentRunner):
         task_description: str,
         input_context: dict[str, Any],
         workspace_dir: str,
-    ) -> str:
+    ) -> tuple[str, int]:
         api_key = settings.anthropic_api_key
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set")
@@ -64,9 +64,12 @@ class APIAgentRunner(BaseAgentRunner):
             response.raise_for_status()
             data = response.json()
             content = data.get("content", [])
-            return "\n".join(
+            text = "\n".join(
                 block.get("text", "") for block in content if block.get("type") == "text"
             )
+            usage = data.get("usage", {})
+            tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+            return text, tokens
 
 
 class CLIAgentRunner(BaseAgentRunner):
@@ -78,7 +81,7 @@ class CLIAgentRunner(BaseAgentRunner):
         task_description: str,
         input_context: dict[str, Any],
         workspace_dir: str,
-    ) -> str:
+    ) -> tuple[str, int]:
         prompt = self._build_prompt(task_description, input_context)
 
         system_prompt_path: str | None = None
@@ -94,7 +97,7 @@ class CLIAgentRunner(BaseAgentRunner):
             "--model", agent.get("model_preference", "claude-sonnet-4-6"),
         ]
         if system_prompt_path:
-            cmd += ["--system-prompt", system_prompt_path]
+            cmd += ["--system", system_prompt_path]
 
         env = {**os.environ, "WORKSPACE": workspace_dir}
 
@@ -120,7 +123,7 @@ class CLIAgentRunner(BaseAgentRunner):
 
         if proc.returncode != 0:
             raise RuntimeError(f"claude CLI exited {proc.returncode}: {stderr.decode()}")
-        return stdout.decode()
+        return stdout.decode(), 0  # CLI runner does not expose token counts
 
 
 def get_runner(agent: dict[str, Any]) -> BaseAgentRunner:

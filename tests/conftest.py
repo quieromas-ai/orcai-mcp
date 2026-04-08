@@ -65,7 +65,7 @@ async def started_engine():
 def mock_api_runner():
     """Patch APIAgentRunner.run to return a canned response."""
     with patch("src.agent_runner.APIAgentRunner.run", new_callable=AsyncMock) as mock:
-        mock.return_value = "Mock agent response"
+        mock.return_value = ("Mock agent response", 0)
         yield mock
 
 
@@ -73,5 +73,5 @@ def mock_api_runner():
 def mock_cli_runner():
     """Patch CLIAgentRunner.run to return a canned response."""
     with patch("src.agent_runner.CLIAgentRunner.run", new_callable=AsyncMock) as mock:
-        mock.return_value = "Mock CLI response"
+        mock.return_value = ("Mock CLI response", 0)
         yield mock

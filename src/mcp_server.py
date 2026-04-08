@@ -154,6 +154,7 @@ async def delegate_task(
     description: str,
     input_context: dict[str, Any] | None = None,
     priority: int = 3,
+    max_retries: int = 0,
 ) -> dict[str, Any]:
     """Assign a task to a specific agent. If the agent is busy or the concurrency
     limit is reached, the task is queued."""
@@ -166,10 +167,10 @@ async def delegate_task(
     await db.execute(
         """
         INSERT INTO tasks (id, agent_id, description, status, priority,
-                           input_context, created_at)
-        VALUES (?, ?, ?, 'queued', ?, ?, ?)
+                           input_context, max_retries, created_at)
+        VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)
         """,
-        (task_id, agent_id, description, priority, json.dumps(ctx), now),
+        (task_id, agent_id, description, priority, json.dumps(ctx), max_retries, now),
     )
     await db.commit()
 
@@ -182,7 +183,11 @@ async def delegate_task(
         await db.commit()
         return {"error": str(exc), "status": "rejected"}
 
-    return {"task_id": task_id, "status": "queued", "position": task_engine.queue_depth()}
+    await asyncio.sleep(0)  # yield to let worker pick up task
+    async with db.execute("SELECT status FROM tasks WHERE id=?", (task_id,)) as cur:
+        row = await cur.fetchone()
+    status = row[0] if row else "queued"
+    return {"task_id": task_id, "status": status, "position": task_engine.queue_depth()}
 
 
 @mcp.tool()
@@ -244,6 +249,7 @@ async def prompt_agent(
     return {
         "agent_id": agent_id,
         "response": output.get("text", ""),
+        "tokens_used": output.get("tokens_used", 0),
         "status": status["status"],
         "error": status.get("error"),
     }

@@ -92,7 +92,8 @@ def register(ctx: click.Context, ide: str | None, url: str, token: str) -> None:
     mcp_url = f"{url}/mcp"
     headers: dict[str, str] = {}
     if token:
-        headers["Authorization"] = "Bearer ${MCP_AUTH_TOKEN}"
+        headers["Authorization"] = f"Bearer {token}"
+        click.echo("Warning: token written to file in plaintext.")
 
     if ide == "claude":
         config = {
@@ -256,5 +257,14 @@ def status(ctx: click.Context, task_id: str) -> None:
 @cli.command()
 @click.argument("agent_id")
 def logs(agent_id: str) -> None:
-    """Tail Docker logs for the container (agent-level logs via docker compose)."""
-    subprocess.run(["docker", "compose", "logs", "-f", "--tail=100"])
+    """Show Docker logs filtered to lines mentioning agent_id.
+
+    Note: filters by string match against container stdout — not a dedicated per-agent stream.
+    """
+    result = subprocess.run(
+        ["docker", "compose", "logs", "--tail=200"],
+        capture_output=True, text=True
+    )
+    for line in result.stdout.splitlines():
+        if agent_id in line:
+            click.echo(line)

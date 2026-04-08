@@ -15,10 +15,10 @@ async def test_stop_waits_for_active_tasks(db_path) -> None:
     """stop() should wait for in-flight tasks to complete before returning."""
     completed = asyncio.Event()
 
-    async def slow_run(*args, **kwargs) -> str:
+    async def slow_run(*args, **kwargs) -> tuple[str, int]:
         await asyncio.sleep(0.15)
         completed.set()
-        return "done"
+        return "done", 0
 
     with patch("src.agent_runner.APIAgentRunner.run", side_effect=slow_run):
         agent = await add_agent(name="SlowBot", role="dev")
@@ -48,9 +48,9 @@ async def test_stop_waits_for_active_tasks(db_path) -> None:
 @pytest.mark.asyncio
 async def test_stop_cancels_on_timeout(db_path) -> None:
     """When drain_timeout is exceeded, stop() should cancel remaining tasks."""
-    async def very_slow_run(*args, **kwargs) -> str:
+    async def very_slow_run(*args, **kwargs) -> tuple[str, int]:
         await asyncio.sleep(60.0)  # won't finish naturally
-        return "never"
+        return "never", 0
 
     with patch("src.agent_runner.APIAgentRunner.run", side_effect=very_slow_run):
         agent = await add_agent(name="FrozenBot", role="dev")
@@ -79,11 +79,11 @@ async def test_queue_not_drained_after_stop(db_path) -> None:
     """Tasks still queued (not yet started) when stop() is called stay queued."""
     calls = 0
 
-    async def counting_run(*args, **kwargs) -> str:
+    async def counting_run(*args, **kwargs) -> tuple[str, int]:
         nonlocal calls
         calls += 1
         await asyncio.sleep(0.2)
-        return "done"
+        return "done", 0
 
     with patch("src.agent_runner.APIAgentRunner.run", side_effect=counting_run):
         agent = await add_agent(name="Queuer", role="dev")
@@ -113,10 +113,10 @@ async def test_active_count(db_path) -> None:
     started = asyncio.Event()
     hold = asyncio.Event()
 
-    async def gated_run(*args, **kwargs) -> str:
+    async def gated_run(*args, **kwargs) -> tuple[str, int]:
         started.set()
         await hold.wait()
-        return "result"
+        return "result", 0
 
     with patch("src.agent_runner.APIAgentRunner.run", side_effect=gated_run):
         agent = await add_agent(name="Gated", role="dev")

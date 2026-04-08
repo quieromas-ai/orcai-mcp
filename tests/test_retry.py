@@ -15,12 +15,12 @@ async def test_task_retries_on_failure(db_path) -> None:
     """A task with max_retries=2 should be retried up to 2 times on failure."""
     attempt = 0
 
-    async def flaky_run(*args, **kwargs) -> str:
+    async def flaky_run(*args, **kwargs) -> tuple[str, int]:
         nonlocal attempt
         attempt += 1
         if attempt < 3:
             raise RuntimeError(f"Transient error (attempt {attempt})")
-        return "success on attempt 3"
+        return "success on attempt 3", 0
 
     # Patch sleep to avoid real delays in tests
     with patch("src.agent_runner.APIAgentRunner.run", side_effect=flaky_run), \
@@ -33,13 +33,10 @@ async def test_task_retries_on_failure(db_path) -> None:
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
 
-            # Inject max_retries directly via DB after creating the task
-            result = await delegate_task(agent_id=agent["id"], description="flaky work")
+            result = await delegate_task(
+                agent_id=agent["id"], description="flaky work", max_retries=2
+            )
             task_id = result["task_id"]
-
-            db = await get_db()
-            await db.execute("UPDATE tasks SET max_retries=2 WHERE id=?", (task_id,))
-            await db.commit()
 
             # Give enough time for 3 attempts (with mocked sleep)
             await asyncio.sleep(0.6)
@@ -68,12 +65,10 @@ async def test_task_fails_after_exhausting_retries(db_path) -> None:
         with patch.object(te_module, "task_engine", engine), \
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
-            result = await delegate_task(agent_id=agent["id"], description="doomed task")
+            result = await delegate_task(
+                agent_id=agent["id"], description="doomed task", max_retries=1
+            )
             task_id = result["task_id"]
-
-            db = await get_db()
-            await db.execute("UPDATE tasks SET max_retries=1 WHERE id=?", (task_id,))
-            await db.commit()
 
             await asyncio.sleep(0.4)
             await engine.stop(drain_timeout=3.0)
@@ -95,7 +90,7 @@ async def test_no_retry_when_max_retries_zero(db_path) -> None:
     """Default max_retries=0 means no retries — fail immediately."""
     call_count = 0
 
-    async def fail_once(*args, **kwargs) -> str:
+    async def fail_once(*args, **kwargs) -> tuple[str, int]:
         nonlocal call_count
         call_count += 1
         raise RuntimeError("immediate fail")
@@ -119,12 +114,12 @@ async def test_retry_increments_retry_count(db_path) -> None:
     """Each retry should increment retry_count in the DB."""
     attempt = 0
 
-    async def fail_twice(*args, **kwargs) -> str:
+    async def fail_twice(*args, **kwargs) -> tuple[str, int]:
         nonlocal attempt
         attempt += 1
         if attempt <= 2:
             raise RuntimeError("fail")
-        return "ok"
+        return "ok", 0
 
     with patch("src.agent_runner.APIAgentRunner.run", side_effect=fail_twice), \
          patch("src.task_engine.asyncio.sleep", new_callable=AsyncMock):
@@ -134,12 +129,10 @@ async def test_retry_increments_retry_count(db_path) -> None:
         with patch.object(te_module, "task_engine", engine), \
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
-            result = await delegate_task(agent_id=agent["id"], description="count retries")
+            result = await delegate_task(
+                agent_id=agent["id"], description="count retries", max_retries=3
+            )
             task_id = result["task_id"]
-
-            db = await get_db()
-            await db.execute("UPDATE tasks SET max_retries=3 WHERE id=?", (task_id,))
-            await db.commit()
 
             await asyncio.sleep(0.6)
             await engine.stop(drain_timeout=3.0)

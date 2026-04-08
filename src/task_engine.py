@@ -146,13 +146,13 @@ class TaskEngine:
 
             try:
                 runner = get_runner(agent)
-                result = await runner.run(
+                result, tokens = await runner.run(
                     agent=agent,
                     task_description=task["description"],
                     input_context=task.get("input_context") or {},
                     workspace_dir=workspace_dir,
                 )
-                await self._complete_task(db, task, agent, result)
+                await self._complete_task(db, task, agent, result, tokens)
 
             except asyncio.CancelledError:
                 # Shutdown drain cancelled this coroutine — mark as failed + reset agent
@@ -179,10 +179,10 @@ class TaskEngine:
                 await db.commit()
 
     async def _complete_task(
-        self, db: Any, task: dict[str, Any], agent: dict[str, Any], result: str
+        self, db: Any, task: dict[str, Any], agent: dict[str, Any], result: str, tokens: int = 0
     ) -> None:
         now = datetime.now(UTC).isoformat()
-        output = {"text": result}
+        output = {"text": result, "tokens_used": tokens}
 
         await self._write_artifact(task["id"], result)
 

@@ -83,6 +83,16 @@ async def list_active_agents() -> dict[str, Any]:
     return cast(dict[str, Any], await get_active_agents())
 
 
+@router.get("/agents/{agent_id}")
+async def get_agent(agent_id: str) -> dict[str, Any]:
+    db = await get_db()
+    async with db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    return parse_json_fields(row_to_dict(row), "config", "skills")
+
+
 @router.post("/agents/{agent_id}/prompt")
 async def prompt_agent_endpoint(
     agent_id: str, body: dict[str, Any]
