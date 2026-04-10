@@ -124,6 +124,66 @@ async def test_dashboard_stats(async_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_logs_empty(async_client: AsyncClient) -> None:
+    r = await async_client.post("/api/v1/agents", json={"name": "LogAgent", "role": "tester"})
+    agent_id = r.json()["id"]
+
+    r = await async_client.get(f"/api/v1/agents/{agent_id}/logs")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["agent_id"] == agent_id
+    assert data["total"] == 0
+    assert data["logs"] == []
+
+
+@pytest.mark.asyncio
+async def test_agent_logs_with_tasks(async_client: AsyncClient, mock_api_runner) -> None:
+    r = await async_client.post("/api/v1/agents", json={"name": "LogWorker", "role": "worker"})
+    agent_id = r.json()["id"]
+
+    for desc in ("First task", "Second task"):
+        await async_client.post(
+            "/api/v1/tasks/delegate",
+            json={"agent_id": agent_id, "description": desc},
+        )
+
+    r = await async_client.get(f"/api/v1/agents/{agent_id}/logs")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 2
+    entry = data["logs"][0]
+    assert "task_id" in entry
+    assert "status" in entry
+    assert "description" in entry
+    assert "response" in entry
+    assert "error" in entry
+    assert "started_at" in entry
+    assert "completed_at" in entry
+
+
+@pytest.mark.asyncio
+async def test_agent_logs_tail(async_client: AsyncClient, mock_api_runner) -> None:
+    r = await async_client.post("/api/v1/agents", json={"name": "TailAgent", "role": "worker"})
+    agent_id = r.json()["id"]
+
+    for i in range(5):
+        await async_client.post(
+            "/api/v1/tasks/delegate",
+            json={"agent_id": agent_id, "description": f"Task {i}"},
+        )
+
+    r = await async_client.get(f"/api/v1/agents/{agent_id}/logs?tail=2")
+    assert r.status_code == 200
+    assert r.json()["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_logs_not_found(async_client: AsyncClient) -> None:
+    r = await async_client.get("/api/v1/agents/nonexistent/logs")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_active_agents(async_client: AsyncClient) -> None:
     r = await async_client.get("/api/v1/agents/active")
     assert r.status_code == 200

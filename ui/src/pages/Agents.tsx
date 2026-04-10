@@ -1,13 +1,108 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Editor from '@monaco-editor/react'
-import { Plus, Pencil, Trash2, ChevronUp, ChevronDown } from 'lucide-react'
-import { fetchAgents, createAgent, updateAgent, deleteAgent } from '../api/agents'
+import { Plus, Pencil, Trash2, ChevronUp, ChevronDown, ScrollText, ChevronRight } from 'lucide-react'
+import { fetchAgents, createAgent, updateAgent, deleteAgent, fetchAgentLogs } from '../api/agents'
 import { Drawer } from '../components/Drawer'
 import { StatusBadge } from '../components/StatusBadge'
 import { EmptyState } from '../components/EmptyState'
 import { Bot } from 'lucide-react'
-import type { Agent, AgentCreate, AgentRunner, AgentStatus } from '../types'
+import type { Agent, AgentCreate, AgentLogEntry, AgentRunner, AgentStatus } from '../types'
+import { relativeTime } from '../utils/time'
+
+const TAIL_OPTIONS = [25, 50, 100]
+
+function LogEntryRow({ entry }: { entry: AgentLogEntry }) {
+  const [expanded, setExpanded] = useState(false)
+  const preview = entry.response?.split('\n')[0] ?? null
+
+  return (
+    <div
+      className="border-b border-border/50 px-4 py-3 hover:bg-raised/30 cursor-pointer"
+      onClick={() => setExpanded(e => !e)}
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 shrink-0">
+          <StatusBadge status={entry.status} size="sm" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs text-slate-300">{entry.description}</p>
+          {entry.error && (
+            <p className="mt-0.5 truncate text-xs text-rose-400">{entry.error}</p>
+          )}
+          {!entry.error && preview && !expanded && (
+            <p className="mt-0.5 truncate text-xs text-slate-600">{preview}</p>
+          )}
+          {expanded && entry.response && (
+            <pre className="mt-2 whitespace-pre-wrap rounded bg-raised px-3 py-2 text-xs text-slate-400 leading-relaxed">
+              {entry.response}
+            </pre>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="text-xs text-slate-600">{relativeTime(entry.completed_at ?? entry.started_at)}</span>
+          <ChevronRight
+            size={12}
+            className={`text-slate-700 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AgentLogsDrawer({ agent, open, onClose }: { agent: Agent | null; open: boolean; onClose: () => void }) {
+  const [tail, setTail] = useState(50)
+
+  const { data, isFetching } = useQuery({
+    queryKey: ['agent-logs', agent?.id, tail],
+    queryFn: () => fetchAgentLogs(agent!.id, tail),
+    enabled: open && !!agent,
+    refetchInterval: 5000,
+  })
+
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title={agent ? `Logs — ${agent.name}` : 'Logs'}
+      width="w-[600px]"
+    >
+      <div className="-mx-6 -mt-5">
+        <div className="flex items-center justify-between border-b border-border px-4 py-2">
+          <div className="flex items-center gap-1.5">
+            <span className={`h-1.5 w-1.5 rounded-full ${isFetching ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+            <span className="text-xs text-slate-500">{isFetching ? 'Updating…' : 'Live · 5s'}</span>
+          </div>
+          <div className="flex items-center gap-1 rounded-md border border-border bg-base p-0.5">
+            {TAIL_OPTIONS.map(n => (
+              <button
+                key={n}
+                onClick={() => setTail(n)}
+                className={`rounded px-2 py-0.5 text-xs font-mono transition-colors
+                  ${tail === n ? 'bg-accent text-white' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {!data ? (
+          <div className="flex items-center justify-center py-16 text-xs text-slate-600">Loading…</div>
+        ) : data.logs.length === 0 ? (
+          <div className="flex items-center justify-center py-16 text-xs text-slate-600">No tasks yet.</div>
+        ) : (
+          <>
+            {data.logs.map(entry => (
+              <LogEntryRow key={entry.task_id} entry={entry} />
+            ))}
+          </>
+        )}
+      </div>
+    </Drawer>
+  )
+}
 
 const MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001']
 
@@ -43,6 +138,8 @@ export function Agents() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [sortField, setSortField] = useState<SortField>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [logsAgent, setLogsAgent] = useState<Agent | null>(null)
+  const [logsOpen, setLogsOpen] = useState(false)
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['agents'] })
 
@@ -81,6 +178,11 @@ export function Agents() {
   function closeDrawer() {
     setOpen(false)
     setEditing(null)
+  }
+
+  function openLogs(agent: Agent) {
+    setLogsAgent(agent)
+    setLogsOpen(true)
   }
 
   function handleSubmit() {
@@ -194,6 +296,13 @@ export function Agents() {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                       <button
+                        onClick={() => openLogs(agent)}
+                        className="rounded p-1 text-slate-600 hover:bg-raised hover:text-slate-300"
+                        title="View logs"
+                      >
+                        <ScrollText size={13} />
+                      </button>
+                      <button
                         onClick={() => openEdit(agent)}
                         className="rounded p-1 text-slate-600 hover:bg-raised hover:text-slate-300"
                       >
@@ -230,6 +339,12 @@ export function Agents() {
           </table>
         )}
       </div>
+
+      <AgentLogsDrawer
+        agent={logsAgent}
+        open={logsOpen}
+        onClose={() => setLogsOpen(false)}
+      />
 
       <Drawer
         open={open}

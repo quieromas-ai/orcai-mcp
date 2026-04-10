@@ -5,13 +5,7 @@ import { fetchTasks } from '../api/tasks'
 import { fetchAgents } from '../api/agents'
 import { StatCard } from '../components/StatCard'
 import { StatusBadge } from '../components/StatusBadge'
-
-function ago(iso: string) {
-  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (secs < 60) return `${secs}s ago`
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`
-  return `${Math.floor(secs / 3600)}h ago`
-}
+import { relativeTime } from '../utils/time'
 
 export function Dashboard() {
   const { data: stats } = useQuery({
@@ -82,7 +76,7 @@ export function Dashboard() {
                 <li key={task.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-raised/50">
                   <StatusBadge status={task.status} size="sm" />
                   <span className="min-w-0 flex-1 truncate text-xs text-slate-400">{task.description}</span>
-                  <span className="shrink-0 font-mono text-xs text-slate-700">{ago(task.created_at)}</span>
+                  <span className="shrink-0 font-mono text-xs text-slate-700">{relativeTime(task.created_at)}</span>
                 </li>
               ))}
             </ul>

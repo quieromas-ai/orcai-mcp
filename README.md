@@ -194,7 +194,24 @@ ANTHROPIC_API_KEY=
 
 When delegating tasks, agents are spawned as Claude Code CLI subprocesses and inherit your existing OAuth session. No charges to an API key, no separate credential to manage.
 
-> **Requirement:** The `claude` CLI must be installed and `claude --version` must return a version number. The local path (no Docker) is required for this mode — the Docker container does not have the Claude Code CLI installed.
+> **Requirement:** The `claude` CLI must be installed and `claude --version` must return a version number.
+> - **Local (no Docker):** install the CLI on the host via `curl -fsSL https://claude.ai/install.sh | bash`.
+> - **Docker:** the official image ships with the Claude Code CLI pre-installed. If you build a custom image, ensure the `claude` binary is available on `PATH` inside the container — without it, tasks will fail with `[Errno 2] No such file or directory` at runtime.
+
+### Docker — passing OAuth credentials to the container
+
+The container runs as a non-root user and has no Claude session of its own. Mount your host session so the CLI inside the container can authenticate:
+
+```yaml
+# docker-compose.yml
+volumes:
+  - ~/.claude:/home/orcai/.claude        # OAuth session, history, config dir
+  - ~/.claude.json:/home/orcai/.claude.json  # active credentials file
+```
+
+Both paths must exist on the host (they are created automatically when you authenticate with `claude` on the host). Because the host user and the container's `orcai` user share uid 1000, no permission issues arise.
+
+> **Note:** `~/.claude.json` sits one level above `~/.claude/` and is **not** included in the directory mount — both entries are required.
 
 ---
 

@@ -19,9 +19,15 @@ RUN uv pip install --system --no-cache -r requirements.txt
 FROM python:3.12-slim
 WORKDIR /app
 
-# System deps (git + curl for health checks)
+# System deps (git + curl for health checks and claude CLI install)
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI — cp -L dereferences the symlink so the actual binary
+# lands in /usr/local/bin rather than a root-only path the orcai user can't access
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+    && cp -L /root/.local/bin/claude /usr/local/bin/claude \
+    && chmod 755 /usr/local/bin/claude
 
 # Copy installed Python packages from builder
 COPY --from=py-builder /usr/local/lib/python3.12 /usr/local/lib/python3.12

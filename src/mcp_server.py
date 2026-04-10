@@ -53,6 +53,31 @@ async def _get_task(task_id: str) -> dict[str, Any]:
     return parse_json_fields(row_to_dict(row), "input_context", "output")
 
 
+async def _get_agent_logs(agent_id: str, tail: int) -> dict[str, Any]:
+    await _get_agent(agent_id)
+    tail = min(max(tail, 1), 200)
+    db = await get_db()
+    async with db.execute(
+        "SELECT * FROM tasks WHERE agent_id=? ORDER BY created_at DESC LIMIT ?",
+        (agent_id, tail),
+    ) as cur:
+        rows = await cur.fetchall()
+    logs = []
+    for row in rows:
+        task = parse_json_fields(row_to_dict(row), "output")
+        output = task.get("output") or {}
+        logs.append({
+            "task_id": task["id"],
+            "status": task["status"],
+            "description": task["description"],
+            "response": output.get("text"),
+            "error": task.get("error"),
+            "started_at": task.get("started_at"),
+            "completed_at": task.get("completed_at"),
+        })
+    return {"agent_id": agent_id, "total": len(logs), "logs": logs}
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -66,7 +91,19 @@ async def add_agent(
     model_preference: str = "claude-sonnet-4-6",
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Register a new sub-agent with a name, role, and system prompt."""
+    """Register a new sub-agent.
+
+    Args:
+        name: Human-readable label for the agent.
+        role: Functional role used for filtering (e.g. "backend", "reviewer").
+        system_prompt: Instructions prepended to every task this agent receives.
+        model_preference: Claude model slug (default: claude-sonnet-4-6).
+        config: Optional overrides — most useful key is "runner": "cli" to use the
+                Claude Code CLI subprocess instead of the Anthropic Messages API.
+
+    Returns:
+        {"id", "name", "status": "idle", "created_at"}
+    """
     db = await get_db()
     agent_id = str(uuid.uuid4())
     now = _now()
@@ -96,7 +133,16 @@ async def update_agent(
     status: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update any field on an existing agent. Pass only the fields to change."""
+    """Update any field on an existing agent. Pass only the fields to change.
+
+    Args:
+        agent_id: ID returned by add_agent.
+        status: Valid values are "idle", "busy", or "offline".
+        config: Merged (not replaced) into the existing config dict.
+
+    Returns:
+        Full updated agent record.
+    """
     agent = await _get_agent(agent_id)
     db = await get_db()
     now = _now()
@@ -165,8 +211,22 @@ async def delegate_task(
     priority: int = 3,
     max_retries: int = 0,
 ) -> dict[str, Any]:
-    """Assign a task to a specific agent. If the agent is busy or the concurrency
-    limit is reached, the task is queued."""
+    """Assign a task to a specific agent. Returns immediately — the task runs in the
+    background. If the agent is busy or the concurrency limit is reached the task is
+    queued; use check_task_status to poll for completion.
+
+    Args:
+        agent_id: Target agent ID.
+        description: The task instruction sent to the agent as its user message.
+        input_context: Optional JSON dict injected below the description.
+        priority: 1 (lowest) – 5 (highest). Default 3. Higher-priority tasks are
+                  dequeued first when a worker slot opens.
+        max_retries: How many times to automatically retry on failure. Default 0.
+
+    Returns:
+        {"task_id", "status": "queued"|"running", "position": <queue depth>}
+        or {"error", "status": "rejected"} if the queue is full.
+    """
     await _get_agent(agent_id)  # validates agent exists
     db = await get_db()
     task_id = str(uuid.uuid4())
@@ -201,7 +261,13 @@ async def delegate_task(
 
 @mcp.tool()
 async def check_task_status(task_id: str) -> dict[str, Any]:
-    """Check the current status of a delegated task."""
+    """Check the current status of a delegated task.
+
+    Returns:
+        {"task_id", "status": "queued"|"running"|"completed"|"failed"|"cancelled",
+         "output": {"text", "tokens_used"} | null,
+         "error": str | null, "started_at", "completed_at"}
+    """
     task = await _get_task(task_id)
     return {
         "task_id": task["id"],
@@ -214,6 +280,25 @@ async def check_task_status(task_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def get_agent_logs(
+    agent_id: str,
+    tail: int = 50,
+) -> dict[str, Any]:
+    """Return the last N task records for an agent as a structured activity log.
+
+    Args:
+        agent_id: Agent to retrieve logs for.
+        tail: Number of most-recent entries to return (default 50, max 200).
+
+    Returns:
+        {"agent_id", "total": int,
+         "logs": [{"task_id", "status", "description", "response": str|null,
+                   "error": str|null, "started_at", "completed_at"}]}
+    """
+    return await _get_agent_logs(agent_id, tail)
+
+
+@mcp.tool()
 async def install_skill(
     name: str,
     description: str = "",
@@ -221,7 +306,18 @@ async def install_skill(
     version: str = "1.0.0",
     assign_to: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Install a skill (markdown file) into the skills library."""
+    """Install a skill (markdown file) into the shared skills library.
+
+    Args:
+        name: Unique skill identifier — also used as the filename (<name>.md).
+        description: One-line summary shown when listing available skills.
+        content: Full markdown content of the skill.
+        version: Semantic version string. Default "1.0.0".
+        assign_to: Optional list of agent IDs to immediately attach this skill to.
+
+    Returns:
+        {"skill_id", "file_path", "assigned_to": [agent_id, ...]}
+    """
     return await _install_skill(name, description, content, version, assign_to)
 
 
@@ -232,7 +328,23 @@ async def prompt_agent(
     context: dict[str, Any] | None = None,
     wait: bool = True,
 ) -> dict[str, Any]:
-    """Send an ad-hoc prompt to an agent and optionally wait for response."""
+    """Send an ad-hoc prompt to an agent.
+
+    Args:
+        agent_id: Target agent ID.
+        message: The prompt to send.
+        context: Optional JSON dict appended to the message as extra context.
+        wait: If True (default), polls until the task completes (up to 5 minutes)
+              and returns the full response. Set to False to return immediately with
+              just the task_id so you can poll via check_task_status yourself — useful
+              for fire-and-forget jobs or when you want to run multiple agents in
+              parallel without blocking.
+
+    Returns:
+        wait=True:  {"agent_id", "response": str, "tokens_used": int,
+                     "status": "completed"|"failed"|"cancelled", "error": str | null}
+        wait=False: {"task_id", "status": "running"}
+    """
     result = await delegate_task(
         agent_id=agent_id,
         description=message,

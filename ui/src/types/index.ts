@@ -81,3 +81,19 @@ export interface SkillCreate {
   version: string
   assign_to: string[]
 }
+
+export interface AgentLogEntry {
+  task_id: string
+  status: TaskStatus
+  description: string
+  response: string | null
+  error: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface AgentLogsResponse {
+  agent_id: string
+  total: number
+  logs: AgentLogEntry[]
+}

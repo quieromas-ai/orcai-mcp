@@ -1,10 +1,12 @@
 import pytest
 
 from src.mcp_server import (
+    _get_agent_logs,
     add_agent,
     check_task_status,
     delegate_task,
     get_active_agents,
+    get_agent_logs,
     get_agents,
     install_skill,
     update_agent,
@@ -98,6 +100,59 @@ async def test_install_skill(db_path) -> None:
     assert result["skill_id"]
     assert "react-component.md" in result["file_path"]
     assert result["assigned_to"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_agent_logs_empty(db_path) -> None:
+    agent = await add_agent(name="LogAgent", role="tester")
+    result = await get_agent_logs(agent_id=agent["id"])
+    assert result["agent_id"] == agent["id"]
+    assert result["total"] == 0
+    assert result["logs"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_agent_logs_with_tasks(db_path, started_engine, mock_api_runner) -> None:
+    agent = await add_agent(name="LogAgent2", role="worker")
+    await delegate_task(agent_id=agent["id"], description="Task one")
+    await delegate_task(agent_id=agent["id"], description="Task two")
+
+    result = await get_agent_logs(agent_id=agent["id"])
+    assert result["total"] == 2
+    log_descriptions = [e["description"] for e in result["logs"]]
+    assert "Task one" in log_descriptions
+    assert "Task two" in log_descriptions
+    first = result["logs"][0]
+    assert "task_id" in first
+    assert "status" in first
+    assert "started_at" in first
+    assert "completed_at" in first
+    assert "error" in first
+    assert "response" in first
+
+
+@pytest.mark.asyncio
+async def test_get_agent_logs_tail(db_path, started_engine, mock_api_runner) -> None:
+    agent = await add_agent(name="LogAgent3", role="worker")
+    for i in range(5):
+        await delegate_task(agent_id=agent["id"], description=f"Task {i}")
+
+    result = await get_agent_logs(agent_id=agent["id"], tail=3)
+    assert result["total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_get_agent_logs_tail_capped(db_path) -> None:
+    agent = await add_agent(name="LogAgent4", role="worker")
+    # tail > 200 should be silently capped — no error
+    result = await _get_agent_logs(agent["id"], tail=9999)
+    assert result["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_agent_logs_not_found(db_path) -> None:
+    with pytest.raises(ValueError, match="not found"):
+        await get_agent_logs(agent_id="nonexistent")
 
 
 @pytest.mark.asyncio

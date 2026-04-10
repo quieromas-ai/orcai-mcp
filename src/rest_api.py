@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from src.config import settings
 from src.database import get_db, parse_json_fields, row_to_dict
 from src.mcp_server import (
+    _get_agent_logs,
     add_agent,
     check_task_status,
     delegate_task,
@@ -107,6 +108,14 @@ async def prompt_agent_endpoint(
                 wait=body.get("wait", True),
             ),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/agents/{agent_id}/logs")
+async def agent_logs(agent_id: str, tail: int = 50) -> dict[str, Any]:
+    try:
+        return cast(dict[str, Any], await _get_agent_logs(agent_id, tail))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
