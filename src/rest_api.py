@@ -121,7 +121,8 @@ async def agent_health(agent_id: str) -> dict[str, Any]:
     agent = parse_json_fields(row_to_dict(row), "config", "skills")
 
     config: dict[str, Any] = agent.get("config") or {}
-    runner_type = config.get("runner", "api")
+    default_runner = "cli" if settings.ide_target == "claude" else "api"
+    runner_type = config.get("runner", default_runner)
 
     if runner_type == "api":
         api_key = settings.anthropic_api_key

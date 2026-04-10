@@ -129,7 +129,8 @@ class CLIAgentRunner(BaseAgentRunner):
 
 def get_runner(agent: dict[str, Any]) -> BaseAgentRunner:
     config: dict[str, Any] = agent.get("config") or {}
-    runner_type: str = config.get("runner", "api")
+    default_runner = "cli" if settings.ide_target == "claude" else "api"
+    runner_type: str = config.get("runner", default_runner)
     if runner_type == "cli":
         return CLIAgentRunner()
     return APIAgentRunner()
