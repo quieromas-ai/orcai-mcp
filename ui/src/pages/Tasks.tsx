@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, ListTodo } from 'lucide-react'
 import { fetchTasks } from '../api/tasks'
@@ -111,9 +111,8 @@ export function Tasks() {
                 const isOpen = expanded.has(task.id)
                 const hasDetail = task.output || task.error || task.retry_count > 0
                 return (
-                  <>
+                  <Fragment key={task.id}>
                     <tr
-                      key={task.id}
                       className="group border-b border-border/50 hover:bg-raised/40"
                       onClick={() => hasDetail && toggleExpand(task.id)}
                     >
@@ -169,7 +168,7 @@ export function Tasks() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 )
               })}
             </tbody>

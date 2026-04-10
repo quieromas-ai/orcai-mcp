@@ -61,6 +61,7 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "agents": agent_count,
         "queue_depth": task_engine.queue_depth(),
+        "max_concurrent_agents": settings.max_concurrent_agents,
     }
 
 

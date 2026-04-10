@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from src.config import settings
-from src.database import get_db, parse_json_fields, row_to_dict
+from src.database import fetch_agent, get_db, parse_json_fields, row_to_dict
 from src.mcp_server import (
     _get_agent_logs,
     add_agent,
@@ -70,11 +70,11 @@ async def patch_agent(agent_id: str, body: AgentUpdate) -> dict[str, Any]:
 
 @router.delete("/agents/{agent_id}", status_code=204)
 async def delete_agent(agent_id: str) -> None:
+    try:
+        await fetch_agent(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     db = await get_db()
-    async with db.execute("SELECT id FROM agents WHERE id=?", (agent_id,)) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     await db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
     await db.commit()
 
@@ -86,12 +86,10 @@ async def list_active_agents() -> dict[str, Any]:
 
 @router.get("/agents/{agent_id}")
 async def get_agent(agent_id: str) -> dict[str, Any]:
-    db = await get_db()
-    async with db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-    return parse_json_fields(row_to_dict(row), "config", "skills")
+    try:
+        return await fetch_agent(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/agents/{agent_id}/prompt")
@@ -115,19 +113,17 @@ async def prompt_agent_endpoint(
 @router.get("/agents/{agent_id}/logs")
 async def agent_logs(agent_id: str, tail: int = 50) -> dict[str, Any]:
     try:
-        return cast(dict[str, Any], await _get_agent_logs(agent_id, tail))
+        return await _get_agent_logs(agent_id, tail)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/agents/{agent_id}/health")
 async def agent_health(agent_id: str) -> dict[str, Any]:
-    db = await get_db()
-    async with db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-    agent = parse_json_fields(row_to_dict(row), "config", "skills")
+    try:
+        agent = await fetch_agent(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
     config: dict[str, Any] = agent.get("config") or {}
     default_runner = "cli" if settings.ide_target == "claude" else "api"

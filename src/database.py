@@ -4,6 +4,8 @@ from typing import Any
 
 import aiosqlite
 
+from src.config import settings
+
 _db: aiosqlite.Connection | None = None
 
 CREATE_AGENTS = """
@@ -56,8 +58,7 @@ CREATE TABLE IF NOT EXISTS skills (
 async def init_database(db_path: str = "") -> None:
     global _db
     if not db_path:
-        data_dir = os.environ.get("DATA_DIR", "/data")
-        db_path = os.path.join(data_dir, "orcai.db")
+        db_path = os.path.join(settings.data_dir, "orcai.db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     _db = await aiosqlite.connect(db_path)
     _db.row_factory = aiosqlite.Row
@@ -94,3 +95,13 @@ def parse_json_fields(d: dict[str, Any], *fields: str) -> dict[str, Any]:
             except (json.JSONDecodeError, TypeError):
                 d[field] = {} if field not in ("skills",) else []
     return d
+
+
+async def fetch_agent(agent_id: str) -> dict[str, Any]:
+    """Load an agent by ID, raising ``ValueError`` if not found."""
+    db = await get_db()
+    async with db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise ValueError(f"Agent '{agent_id}' not found")
+    return parse_json_fields(row_to_dict(row), "config", "skills")

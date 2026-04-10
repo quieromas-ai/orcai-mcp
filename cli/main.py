@@ -67,7 +67,10 @@ _DEVCONTAINER_JSON = {
 
 @cli.command()
 @click.option("--ide", type=click.Choice(["claude", "cursor"]), default="claude", show_default=True)
-@click.option("--devcontainer", is_flag=True, default=False, help="Scaffold .devcontainer/ for VS Code / Cursor dev containers")
+@click.option(
+    "--devcontainer", is_flag=True, default=False,
+    help="Scaffold .devcontainer/ for VS Code / Cursor dev containers",
+)
 def init(ide: str, devcontainer: bool) -> None:
     """Initialise project artifact directories for Claude Code or Cursor."""
     base = f".{ide}"

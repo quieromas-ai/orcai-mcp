@@ -8,7 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from src.config import settings
-from src.database import get_db, parse_json_fields, row_to_dict
+from src.database import fetch_agent, get_db, parse_json_fields, row_to_dict
 from src.skill_manager import get_skills
 from src.skill_manager import install_skill as _install_skill
 from src.task_engine import QueueFullError, task_engine
@@ -36,12 +36,7 @@ def _now() -> str:
 
 
 async def _get_agent(agent_id: str) -> dict[str, Any]:
-    db = await get_db()
-    async with db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)) as cur:
-        row = await cur.fetchone()
-    if not row:
-        raise ValueError(f"Agent '{agent_id}' not found")
-    return parse_json_fields(row_to_dict(row), "config", "skills")
+    return await fetch_agent(agent_id)
 
 
 async def _get_task(task_id: str) -> dict[str, Any]:

@@ -1,3 +1,4 @@
+# Keep in sync with [project.dependencies] in pyproject.toml
 mcp>=1.6.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0

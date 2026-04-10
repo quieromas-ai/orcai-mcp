@@ -26,6 +26,11 @@ dependencies = [
     "click>=8.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/quieromas-ai/orcai-mcp"
+Repository = "https://github.com/quieromas-ai/orcai-mcp"
+Issues = "https://github.com/quieromas-ai/orcai-mcp/issues"
+
 [project.scripts]
 orcai-mcp = "cli.main:cli"
 

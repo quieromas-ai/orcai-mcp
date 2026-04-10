@@ -26,16 +26,19 @@ htmlcov/
 # Secrets / local config
 .env
 .envrc
+.github/
 
 # Runtime state
 data/
 workspace/
+skills/
 
 # IDE-generated MCP config
 .mcp.json
 
 # Claude / Cursor local files
 .claude/
+.cursor/
 .cursorignore
 .cursorindexingignore
 
@@ -49,6 +52,9 @@ ui/build/
 # Database files
 *.db
 *.sqlite
+
+# Package manager lockfiles
+uv.lock
 
 # OS
 .DS_Store

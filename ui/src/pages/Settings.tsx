@@ -7,6 +7,7 @@ interface HealthData {
   status: string
   agents: number
   queue_depth: number
+  max_concurrent_agents?: number
 }
 
 export function Settings() {
@@ -133,7 +134,7 @@ export function Settings() {
 
       <Section title="Capacity">
         <Row label="Max Concurrent Agents">
-          <span className="font-mono text-xs text-slate-300">{health ? '3' : '—'}</span>
+          <span className="font-mono text-xs text-slate-300">{health?.max_concurrent_agents ?? '—'}</span>
         </Row>
         <Row label="Queue Depth">
           <span className="font-mono text-xs text-slate-300">{health?.queue_depth ?? '—'}</span>
