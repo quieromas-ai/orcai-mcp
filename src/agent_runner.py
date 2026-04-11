@@ -75,6 +75,29 @@ class APIAgentRunner(BaseAgentRunner):
 class CLIAgentRunner(BaseAgentRunner):
     """Spawns the Claude Code CLI as a subprocess."""
 
+    _DELEGATION_HINT = (
+        "\n\n---\n"
+        "You have access to sibling agents via the orcai-mcp MCP server. "
+        "Use `get_agents` to discover them and `delegate_task` to assign work. "
+        "Poll with `check_task_status` until the task completes."
+    )
+
+    @staticmethod
+    def _write_mcp_config(workspace_dir: str) -> str:
+        """Write an MCP config file that connects back to the delegate endpoint."""
+        mcp_config = {
+            "mcpServers": {
+                "orcai-mcp": {
+                    "type": "http",
+                    "url": f"http://localhost:{settings.port}/mcp/delegate/mcp",
+                }
+            }
+        }
+        path = os.path.join(workspace_dir, ".mcp-delegate.json")
+        with open(path, "w") as f:
+            json.dump(mcp_config, f)
+        return path
+
     async def run(
         self,
         agent: dict[str, Any],
@@ -84,8 +107,12 @@ class CLIAgentRunner(BaseAgentRunner):
     ) -> tuple[str, int]:
         prompt = self._build_prompt(task_description, input_context)
 
-        system_prompt_path: str | None = None
+        delegation_enabled = settings.enable_agent_delegation
         system_prompt = agent.get("system_prompt", "")
+        if delegation_enabled and system_prompt:
+            system_prompt += self._DELEGATION_HINT
+
+        system_prompt_path: str | None = None
         if system_prompt:
             system_prompt_path = os.path.join(workspace_dir, ".system_prompt.md")
             with open(system_prompt_path, "w") as f:
@@ -99,6 +126,10 @@ class CLIAgentRunner(BaseAgentRunner):
         ]
         if system_prompt_path:
             cmd += ["--system-prompt-file", system_prompt_path]
+
+        if delegation_enabled:
+            mcp_config_path = self._write_mcp_config(workspace_dir)
+            cmd += ["--mcp-config", mcp_config_path]
 
         env = {**os.environ, "WORKSPACE": workspace_dir}
 

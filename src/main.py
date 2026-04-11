@@ -12,6 +12,7 @@ from src.auth import BearerTokenMiddleware
 from src.config import settings
 from src.database import close_database, get_db, init_database
 from src.logging_config import configure_logging
+from src.mcp_delegate import delegate_mcp
 from src.mcp_server import mcp
 from src.rest_api import router as api_router
 from src.task_engine import task_engine
@@ -19,10 +20,11 @@ from src.task_engine import task_engine
 configure_logging()
 logger = logging.getLogger(__name__)
 
-# Initialise the FastMCP sub-app at import time so the session manager exists
+# Initialise the FastMCP sub-apps at import time so session managers exist
 # before the lifespan runs. FastAPI does not invoke a mounted sub-app's own
 # lifespan, so we drive session_manager.run() from our lifespan instead.
 _mcp_http_app = mcp.streamable_http_app()
+_delegate_http_app = delegate_mcp.streamable_http_app()
 
 
 @asynccontextmanager
@@ -32,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_database(db_path)
     task_engine.start()
     logger.info("Database and task engine initialised")
-    async with mcp.session_manager.run():
+    async with mcp.session_manager.run(), delegate_mcp.session_manager.run():
         yield
     logger.info("Shutting down orcai-mcp server")
     await task_engine.stop()
@@ -69,6 +71,9 @@ async def health() -> dict[str, Any]:
 _ui_build = os.path.join(os.path.dirname(__file__), "..", "ui", "build")
 if os.path.isdir(_ui_build):
     app.mount("/ui", StaticFiles(directory=_ui_build, html=True), name="ui")
+
+# Restricted delegation endpoint for agent-to-agent MCP calls (localhost only).
+app.mount("/mcp/delegate", _delegate_http_app)
 
 # Mount the pre-initialised FastMCP sub-app at root so its internal /mcp route
 # is reachable. FastAPI routes (/health, /api/v1/*, /ui) take precedence.

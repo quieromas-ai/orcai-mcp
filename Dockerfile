@@ -19,8 +19,8 @@ RUN uv pip install --system --no-cache -r requirements.txt
 FROM python:3.12-slim
 WORKDIR /app
 
-# System deps (git + curl for health checks and claude CLI install)
-RUN apt-get update && apt-get install -y --no-install-recommends git curl \
+# System deps (git + curl for health checks and claude CLI install, openssh-client for git push over SSH)
+RUN apt-get update && apt-get install -y --no-install-recommends git curl openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI — cp -L dereferences the symlink so the actual binary

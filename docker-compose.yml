@@ -9,6 +9,9 @@ services:
       - ./workspace:/workspace
       - ./skills:/skills
       - ${PROJECT_DIR:-.}:/project
+      # Git & SSH: mount host credentials so agents can push to repos
+      - ~/.ssh:/home/orcai/.ssh:ro
+      - ~/.gitconfig:/home/orcai/.gitconfig:ro
     environment:
       - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
       - MCP_AUTH_DISABLED=${MCP_AUTH_DISABLED:-true}

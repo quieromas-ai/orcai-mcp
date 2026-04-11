@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed Host header values for DNS rebinding protection.
     # Leave empty to disable the protection (e.g. when behind a trusted reverse proxy).
     mcp_allowed_hosts: str = ""
+    # When True, CLI-runner agents get the orcai-mcp delegate endpoint registered
+    # as an MCP server so they can delegate tasks to sibling agents.
+    enable_agent_delegation: bool = True
 
 
 settings = Settings()

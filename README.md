@@ -213,6 +213,21 @@ Both paths must exist on the host (they are created automatically when you authe
 
 > **Note:** `~/.claude.json` sits one level above `~/.claude/` and is **not** included in the directory mount — both entries are required.
 
+### Docker — enabling git push (SSH keys & git config)
+
+Agents running in Docker need the host's SSH keys and git config to push to remote repositories. The default `docker-compose.yml` already includes these mounts:
+
+```yaml
+# docker-compose.yml
+volumes:
+  - ~/.ssh:/home/orcai/.ssh:ro              # SSH keys + known_hosts (read-only)
+  - ~/.gitconfig:/home/orcai/.gitconfig:ro  # git user.name, user.email, etc.
+```
+
+Both are mounted read-only (`:ro`) — the container can authenticate but cannot modify your host credentials. The host user and the container's `orcai` user share uid 1000, so permissions work without adjustment.
+
+> **Prerequisites:** `~/.ssh/` must contain your SSH key (e.g. `id_ed25519`) and `known_hosts` with entries for your git hosts (GitHub, GitLab, etc.). If `known_hosts` is missing, run `ssh-keyscan github.com >> ~/.ssh/known_hosts` on the host before starting the container.
+
 ---
 
 ## Connecting to Claude desktop app (Cowork / Claude.ai)
@@ -323,6 +338,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `SKILLS_DIR` | `/skills` | Installed skill Markdown files |
 | `PROJECT_DIR` | `.` | Project root (artifacts written here) |
 || `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated allowed `Host` header values for DNS rebinding protection. Required when behind a reverse proxy — set to your public domain (e.g. `mcp.yourserver.com`). Empty disables the check. |
+| `ENABLE_AGENT_DELEGATION` | `true` | When enabled, CLI-runner agents can delegate tasks to sibling agents via a restricted MCP endpoint. |
 
 ---
 
@@ -380,6 +396,43 @@ add_agent(name="API Agent", role="...", config={"runner": "api"})
 
 ```python
 add_agent(name="CLI Agent", role="...", config={"runner": "cli"})
+```
+
+### Agent-to-agent delegation
+
+CLI-runner agents can delegate tasks to sibling agents. When `ENABLE_AGENT_DELEGATION=true` (the default), each CLI subprocess is launched with the orcai-mcp delegate endpoint registered as an MCP server. The agent can then discover siblings and assign them work without any manual configuration.
+
+```
+IDE (Claude Code / Cursor)
+    │  MCP /mcp (all 8 tools)
+    ▼
+orcai-mcp container  :8100
+    │  spawns CLI subprocesses
+    ▼
+Agent A ──── MCP /mcp/delegate (4 tools) ──── orcai-mcp
+Agent B ──── MCP /mcp/delegate (4 tools) ──── orcai-mcp
+    │
+    └─── Agent A calls delegate_task → Agent B picks up the work
+```
+
+Sub-agents get a restricted tool set to prevent runaway agent creation or deadlocks:
+
+| Tool | Available | Reason |
+|---|---|---|
+| `get_agents` | Yes | Discover sibling agents |
+| `delegate_task` | Yes | Assign work to a sibling |
+| `check_task_status` | Yes | Poll for completion |
+| `get_agent_logs` | Yes | Read a sibling's output |
+| `add_agent` | No | Only the parent IDE creates agents |
+| `update_agent` | No | Only the parent IDE mutates agents |
+| `install_skill` | No | Only the parent IDE manages skills |
+| `prompt_agent` | No | Blocks with polling — could deadlock |
+
+A delegation hint is automatically appended to each CLI agent's system prompt so the agent knows it can delegate. To disable agent-to-agent delegation entirely:
+
+```bash
+# .env
+ENABLE_AGENT_DELEGATION=false
 ```
 
 ---
@@ -531,7 +584,7 @@ Bug reports and feature requests via [GitHub Issues](https://github.com/quieroma
 
 - [ ] `--ssl-certfile` / `--ssl-keyfile` flags on `orcai-mcp up --local`
 - [x] Dev container scaffolding (`orcai-mcp init --devcontainer` generates `.devcontainer/`)
-- [ ] Agent-to-agent delegation
+- [x] Agent-to-agent delegation
 - [ ] Multi-model support (OpenAI, Ollama)
 - [ ] Webhook / Slack completion events
 - [ ] MCP Registry listing
