@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="orcai-mcp-logo.png" alt="orcai-mcp">
+</p>
+
 # orcai-mcp
 
 **A self-hostable MCP server that lets Claude Code and Cursor manage a fleet of sub-agents per project.**
