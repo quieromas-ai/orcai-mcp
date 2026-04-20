@@ -40,6 +40,7 @@ Anthropic API  /  Claude Code CLI subprocess
 - **8 MCP tools** — add, update, list, and prompt agents; delegate tasks with priority and retry; install skills
 - **Task queue** — configurable concurrency limit and queue depth; priority ordering (1–5); exponential-backoff retries
 - **Two execution modes** — call the Anthropic API directly (`runner: api`) or spawn the Claude Code CLI as a subprocess (`runner: cli`)
+- **Shared project workspace** — CLI agents automatically receive `$PROJECT_DIR` in their environment and a `project/` symlink in their working directory pointing at the project root, enabling all agents to read and write shared files
 - **React UI** — dashboard, agent editor with system-prompt editing, task history, skills library
 - **CLI** — `orcai-mcp init / up / down / register / add / delegate / status / logs`
 - **IDE auto-registration** — writes `.mcp.json` (Claude Code) or `.cursor/mcp.json` (Cursor) for you
@@ -340,7 +341,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `DATA_DIR` | `/data` | SQLite database location |
 | `WORKSPACE_DIR` | `/workspace` | Agent working directories |
 | `SKILLS_DIR` | `/skills` | Installed skill Markdown files |
-| `PROJECT_DIR` | `.` | Project root (artifacts written here) |
+| `PROJECT_DIR` | `.` | Project root — artifacts are written here; also exposed to CLI agents as `$PROJECT_DIR` and a `project/` symlink in each agent's workspace |
 || `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated allowed `Host` header values for DNS rebinding protection. Required when behind a reverse proxy — set to your public domain (e.g. `mcp.yourserver.com`). Empty disables the check. |
 | `ENABLE_AGENT_DELEGATION` | `true` | When enabled, CLI-runner agents can delegate tasks to sibling agents via a restricted MCP endpoint. |
 
@@ -437,6 +438,40 @@ A delegation hint is automatically appended to each CLI agent's system prompt so
 ```bash
 # .env
 ENABLE_AGENT_DELEGATION=false
+```
+
+### Shared workspace
+
+Every CLI-runner agent gets two ways to reach the shared project directory (`PROJECT_DIR`):
+
+| Mechanism | Value | Notes |
+|---|---|---|
+| `$PROJECT_DIR` env var | path to `PROJECT_DIR` | available to any shell command or tool |
+| `project/` symlink in cwd | → `PROJECT_DIR` | visible from `ls` in the agent's own workspace |
+
+Each agent still has its own private workspace at `/workspace/{agent-id}/` — helper files (`.system_prompt.md`, `.mcp-delegate.json`) and agent-specific artefacts live there. The `project/` symlink is an additional entry point, not a replacement.
+
+**Docker:** `PROJECT_DIR` must be bind-mounted into the container for the symlink to resolve. The default `docker-compose.yml` already does this:
+
+```yaml
+volumes:
+  - ${PROJECT_DIR:-.}:/project
+```
+
+Set `PROJECT_DIR` in your `.env` to the host path of your project:
+
+```bash
+# .env
+PROJECT_DIR=/path/to/your/project
+```
+
+**Local (no Docker):** `PROJECT_DIR` can be a relative path (e.g. `.`) — the symlink will point there. Because the server and agents run in the same OS process, the path resolves without any mount.
+
+**Multi-agent collaboration:** when multiple agents share the same `PROJECT_DIR`, they can write to a common directory and read each other's output without needing to know sibling workspace UUIDs. Reference the shared path in system prompts to establish a naming convention, for example:
+
+```
+Write deliverables to: $PROJECT_DIR/cowork-resources/<your-name>/
+Read other agents' output from: $PROJECT_DIR/cowork-resources/
 ```
 
 ---
@@ -589,6 +624,7 @@ Bug reports and feature requests via [GitHub Issues](https://github.com/quieroma
 - [ ] `--ssl-certfile` / `--ssl-keyfile` flags on `orcai-mcp up --local`
 - [x] Dev container scaffolding (`orcai-mcp init --devcontainer` generates `.devcontainer/`)
 - [x] Agent-to-agent delegation
+- [x] Shared project workspace (`$PROJECT_DIR` + `project/` symlink for CLI agents)
 - [ ] Multi-model support (OpenAI, Ollama)
 - [ ] Webhook / Slack completion events
 - [ ] MCP Registry listing

@@ -131,7 +131,14 @@ class CLIAgentRunner(BaseAgentRunner):
             mcp_config_path = self._write_mcp_config(workspace_dir)
             cmd += ["--mcp-config", mcp_config_path]
 
-        env = {**os.environ, "WORKSPACE": workspace_dir}
+        env = {**os.environ, "WORKSPACE": workspace_dir, "PROJECT_DIR": settings.project_dir}
+
+        # Create a 'project' symlink in the workspace so agents can reference the
+        # shared project directory via a relative path (./project/) in addition to $PROJECT_DIR.
+        shared_dir = settings.project_dir
+        symlink_path = os.path.join(workspace_dir, "project")
+        if os.path.isdir(shared_dir) and not os.path.lexists(symlink_path):
+            os.symlink(shared_dir, symlink_path)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
