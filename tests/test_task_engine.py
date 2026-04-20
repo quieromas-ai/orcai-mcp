@@ -69,7 +69,7 @@ async def test_api_runner_called(db_path, mock_api_runner) -> None:
          patch.object(mcp_module, "task_engine", engine):
         engine.start()
         result = await delegate_task(
-            agent_id=agent["id"],
+            agent=agent["id"],
             description="Do something",
             priority=3,
         )
@@ -102,7 +102,7 @@ async def test_cli_runner_used_when_configured(db_path, mock_cli_runner) -> None
     with patch.object(te_module, "task_engine", engine), \
          patch.object(mcp_module, "task_engine", engine):
         engine.start()
-        await delegate_task(agent_id=agent["id"], description="CLI task", priority=3)
+        await delegate_task(agent=agent["id"], description="CLI task", priority=3)
         await asyncio.sleep(0.3)
         await engine.stop()
 
@@ -134,7 +134,7 @@ async def test_cli_runner_end_to_end_with_system_prompt(db_path) -> None:
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
             result = await delegate_task(
-                agent_id=agent["id"],
+                agent=agent["id"],
                 description="Say the word 'hello' and nothing else.",
                 priority=3,
             )

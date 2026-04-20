@@ -8,9 +8,10 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from src.agent_registry import list_agents
 from src.auth import BearerTokenMiddleware
 from src.config import settings
-from src.database import close_database, get_db, init_database
+from src.database import close_database, init_database
 from src.logging_config import configure_logging
 from src.mcp_delegate import delegate_mcp
 from src.mcp_server import mcp
@@ -55,13 +56,9 @@ app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    db = await get_db()
-    async with db.execute("SELECT COUNT(*) FROM agents") as cur:
-        row = await cur.fetchone()
-    agent_count: int = row[0] if row else 0
     return {
         "status": "ok",
-        "agents": agent_count,
+        "agents": len(list_agents()),
         "queue_depth": task_engine.queue_depth(),
         "max_concurrent_agents": settings.max_concurrent_agents,
     }

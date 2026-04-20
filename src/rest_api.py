@@ -5,6 +5,8 @@ from typing import Any, cast
 import httpx
 from fastapi import APIRouter, HTTPException
 
+import src.task_engine as _te_module
+from src.agent_registry import delete_agent, get_agent, list_agents, list_skills
 from src.config import settings
 from src.database import fetch_agent, get_db, parse_json_fields, row_to_dict
 from src.mcp_server import (
@@ -14,13 +16,11 @@ from src.mcp_server import (
     delegate_task,
     get_active_agents,
     get_agents,
-    install_skill,
     prompt_agent,
     update_agent,
 )
 from src.models import AgentCreate, AgentUpdate, DashboardStats, SkillCreate, TaskCreate
-from src.skill_manager import get_skills
-from src.task_engine import task_engine
+from src.skill_manager import install_skill
 
 router = APIRouter()
 
@@ -31,22 +31,27 @@ router = APIRouter()
 
 
 @router.get("/agents")
-async def list_agents(role: str | None = None, status: str | None = None) -> dict[str, Any]:
+async def list_agents_endpoint(
+    role: str | None = None, status: str | None = None
+) -> dict[str, Any]:
     return cast(dict[str, Any], await get_agents(role=role, status=status))
 
 
 @router.post("/agents", status_code=201)
 async def create_agent(body: AgentCreate) -> dict[str, Any]:
-    return cast(
-        dict[str, Any],
-        await add_agent(
-            name=body.name,
-            role=body.role,
-            system_prompt=body.system_prompt,
-            model_preference=body.model_preference,
-            config=body.config,
-        ),
-    )
+    try:
+        return cast(
+            dict[str, Any],
+            await add_agent(
+                name=body.name,
+                role=body.role,
+                system_prompt=body.system_prompt,
+                model_preference=body.model_preference,
+                config=body.config,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.patch("/agents/{agent_id}")
@@ -55,7 +60,7 @@ async def patch_agent(agent_id: str, body: AgentUpdate) -> dict[str, Any]:
         return cast(
             dict[str, Any],
             await update_agent(
-                agent_id=agent_id,
+                agent=agent_id,
                 name=body.name,
                 role=body.role,
                 system_prompt=body.system_prompt,
@@ -69,13 +74,13 @@ async def patch_agent(agent_id: str, body: AgentUpdate) -> dict[str, Any]:
 
 
 @router.delete("/agents/{agent_id}", status_code=204)
-async def delete_agent(agent_id: str) -> None:
+async def delete_agent_endpoint(agent_id: str) -> None:
     try:
-        await fetch_agent(agent_id)
+        delete_agent(agent_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     db = await get_db()
-    await db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
+    await db.execute("DELETE FROM agents_state WHERE slug=?", (agent_id,))
     await db.commit()
 
 
@@ -85,7 +90,7 @@ async def list_active_agents() -> dict[str, Any]:
 
 
 @router.get("/agents/{agent_id}")
-async def get_agent(agent_id: str) -> dict[str, Any]:
+async def get_agent_endpoint(agent_id: str) -> dict[str, Any]:
     try:
         return await fetch_agent(agent_id)
     except ValueError as exc:
@@ -100,7 +105,7 @@ async def prompt_agent_endpoint(
         return cast(
             dict[str, Any],
             await prompt_agent(
-                agent_id=agent_id,
+                agent=agent_id,
                 message=body.get("message", ""),
                 context=body.get("context"),
                 wait=body.get("wait", True),
@@ -121,13 +126,11 @@ async def agent_logs(agent_id: str, tail: int = 50) -> dict[str, Any]:
 @router.get("/agents/{agent_id}/health")
 async def agent_health(agent_id: str) -> dict[str, Any]:
     try:
-        agent = await fetch_agent(agent_id)
+        agent = get_agent(agent_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    config: dict[str, Any] = agent.get("config") or {}
-    default_runner = "cli" if settings.ide_target == "claude" else "api"
-    runner_type = config.get("runner", default_runner)
+    runner_type = agent.get("runner", "api")
 
     if runner_type == "api":
         api_key = settings.anthropic_api_key
@@ -162,7 +165,7 @@ async def delegate(body: TaskCreate) -> dict[str, Any]:
         return cast(
             dict[str, Any],
             await delegate_task(
-                agent_id=body.agent_id,
+                agent=body.agent_id,
                 description=body.description,
                 input_context=body.input_context,
                 priority=body.priority,
@@ -208,21 +211,18 @@ async def list_tasks(
 
 @router.post("/skills/install", status_code=201)
 async def install_skill_endpoint(body: SkillCreate) -> dict[str, Any]:
-    return cast(
-        dict[str, Any],
-        await install_skill(
-            name=body.name,
-            description=body.description,
-            content=body.content,
-            version=body.version,
-            assign_to=body.assign_to,
-        ),
+    return install_skill(
+        name=body.name,
+        description=body.description,
+        content=body.content,
+        version=body.version,
+        assign_to=body.assign_to,
     )
 
 
 @router.get("/skills")
-async def list_skills() -> dict[str, Any]:
-    skills = await get_skills()
+async def list_skills_endpoint() -> dict[str, Any]:
+    skills = list_skills()
     return {"skills": skills, "total": len(skills)}
 
 
@@ -235,23 +235,28 @@ async def list_skills() -> dict[str, Any]:
 async def dashboard_stats() -> DashboardStats:
     db = await get_db()
     today = datetime.now(UTC).date().isoformat()
-    async with db.execute(
-        """
-        SELECT
-            (SELECT COUNT(*) FROM agents)                                    AS total_agents,
-            (SELECT COUNT(*) FROM agents WHERE status='busy')               AS active_agents,
-            (SELECT COUNT(*) FROM tasks WHERE status='queued')              AS queued_tasks,
-            (SELECT COUNT(*) FROM skills)                                    AS total_skills,
-            (SELECT COUNT(*) FROM tasks WHERE date(created_at)=?)           AS tasks_today
-        """,
-        (today,),
-    ) as cur:
-        row = await cur.fetchone()
+
+    agents = list_agents()
+    total_agents = len(agents)
+    skills = list_skills()
+    total_skills = len(skills)
+
+    async def _count(sql: str, *params: Any) -> int:
+        async with db.execute(sql, params) as cur:
+            row = await cur.fetchone()
+        return row[0] if row else 0
+
+    active_agents, queued_tasks, tasks_today = await asyncio.gather(
+        _count("SELECT COUNT(*) FROM agents_state WHERE status='busy'"),
+        _count("SELECT COUNT(*) FROM tasks WHERE status='queued'"),
+        _count("SELECT COUNT(*) FROM tasks WHERE date(created_at)=?", today),
+    )
+
     return DashboardStats(
-        total_agents=row[0] if row else 0,
-        active_agents=row[1] if row else 0,
-        queued_tasks=row[2] if row else 0,
-        total_skills=row[3] if row else 0,
-        tasks_today=row[4] if row else 0,
-        queue_depth=task_engine.queue_depth(),
+        total_agents=total_agents,
+        active_agents=active_agents,
+        queued_tasks=queued_tasks,
+        total_skills=total_skills,
+        tasks_today=tasks_today,
+        queue_depth=_te_module.task_engine.queue_depth(),
     )

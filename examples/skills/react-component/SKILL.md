@@ -1,3 +1,10 @@
+---
+name: react-component
+description: Writing accessible React components
+version: 1.0.0
+installed_at: '2026-01-01T00:00:00+00:00'
+---
+
 # Skill: React Component
 
 When creating a React component, follow this pattern:

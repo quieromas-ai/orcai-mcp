@@ -6,6 +6,8 @@ import sys
 import click
 import httpx
 
+from cli.migrate import run as _run_migration
+
 
 def _server_url(ctx: click.Context) -> str:
     return str(ctx.obj.get("url", "http://localhost:8100"))
@@ -41,8 +43,7 @@ _DEVCONTAINER_JSON = {
         "MAX_CONCURRENT_AGENTS": "3",
         "TASK_QUEUE_SIZE": "20",
         "DATA_DIR": "./data",
-        "WORKSPACE_DIR": "./workspace",
-        "SKILLS_DIR": "./skills",
+        "CLAUDE_DIR": "./.claude",
         "PROJECT_DIR": ".",
     },
     "customizations": {
@@ -205,13 +206,12 @@ def list_agents(ctx: click.Context) -> None:
         click.echo("No agents registered.")
         return
 
-    fmt = "{:<36}  {:<20}  {:<12}  {:<12}  {:<6}"
-    click.echo(fmt.format("ID", "NAME", "ROLE", "STATUS", "RUNNER"))
-    click.echo("-" * 95)
+    fmt = "{:<30}  {:<12}  {:<10}  {:<6}"
+    click.echo(fmt.format("SLUG", "ROLE", "STATUS", "RUNNER"))
+    click.echo("-" * 65)
     for a in agents:
-        cfg = a.get("config") or {}
-        runner = cfg.get("runner", "api")
-        click.echo(fmt.format(a["id"], a["name"][:20], a["role"][:12], a["status"], runner))
+        runner = a.get("runner", "api")
+        click.echo(fmt.format(a["id"][:30], a.get("role", "")[:12], a["status"], runner))
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ def add(
         sys.exit(1)
 
     data = r.json()
-    click.echo(f"Agent created: {data['id']} ({name})")
+    click.echo(f"Agent created: {data['id']}")
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +308,64 @@ def status(ctx: click.Context, task_id: str) -> None:
 # ---------------------------------------------------------------------------
 # logs
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# migrate-to-claude
+# ---------------------------------------------------------------------------
+
+
+@cli.command("migrate-to-claude")
+@click.option(
+    "--db", "db_path",
+    default=None,
+    help="Path to orcai.db (default: DATA_DIR/orcai.db from env or .env).",
+)
+@click.option(
+    "--claude-dir", "claude_dir",
+    default=None,
+    help="Destination .claude/ directory (default: CLAUDE_DIR from env or .env).",
+)
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show what would happen without writing.")
+@click.option("--no-backup", "backup", is_flag=True, default=True, flag_value=False,
+              help="Skip creating a .premigrate.bak DB backup before mutating.")
+def migrate_to_claude(
+    db_path: str | None, claude_dir: str | None, dry_run: bool, backup: bool
+) -> None:
+    """Export SQLite agents/skills → .claude/agents/*.md and drop the agents/skills tables."""
+    # Resolve defaults from environment / .env
+    if db_path is None:
+        data_dir = os.environ.get("DATA_DIR", "")
+        if not data_dir:
+            try:
+                from src.config import settings
+                data_dir = settings.data_dir
+            except Exception:
+                pass
+        db_path = os.path.join(data_dir, "orcai.db") if data_dir else "orcai.db"
+
+    if claude_dir is None:
+        claude_dir = os.environ.get("CLAUDE_DIR", "")
+        if not claude_dir:
+            try:
+                from src.config import settings
+                claude_dir = settings.claude_dir
+            except Exception:
+                pass
+        if not claude_dir:
+            click.echo("ERROR: CLAUDE_DIR not set. Pass --claude-dir or set CLAUDE_DIR.", err=True)
+            sys.exit(1)
+
+    click.echo(f"DB:        {db_path}")
+    click.echo(f"claude_dir: {claude_dir}")
+    if dry_run:
+        click.echo("Mode:      dry-run (no files will be written)")
+
+    rc = _run_migration(db_path, claude_dir, dry_run=dry_run, backup=backup)
+    if rc == 0 and not dry_run:
+        click.echo("\nMigration complete. Restart the server to pick up the new layout.")
+    sys.exit(rc)
 
 
 @cli.command()

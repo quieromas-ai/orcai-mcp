@@ -22,7 +22,7 @@ class BaseAgentRunner(ABC):
         agent: dict[str, Any],
         task_description: str,
         input_context: dict[str, Any],
-        workspace_dir: str,
+        task_scratch_dir: str,
     ) -> tuple[str, int]:
         """Execute task and return (result_text, tokens_used)."""
 
@@ -35,7 +35,7 @@ class APIAgentRunner(BaseAgentRunner):
         agent: dict[str, Any],
         task_description: str,
         input_context: dict[str, Any],
-        workspace_dir: str,
+        task_scratch_dir: str,
     ) -> tuple[str, int]:
         api_key = settings.anthropic_api_key
         if not api_key:
@@ -83,8 +83,7 @@ class CLIAgentRunner(BaseAgentRunner):
     )
 
     @staticmethod
-    def _write_mcp_config(workspace_dir: str) -> str:
-        """Write an MCP config file that connects back to the delegate endpoint."""
+    def _write_mcp_config(scratch_dir: str) -> str:
         mcp_config = {
             "mcpServers": {
                 "orcai-mcp": {
@@ -93,7 +92,7 @@ class CLIAgentRunner(BaseAgentRunner):
                 }
             }
         }
-        path = os.path.join(workspace_dir, ".mcp-delegate.json")
+        path = os.path.join(scratch_dir, ".mcp-delegate.json")
         with open(path, "w") as f:
             json.dump(mcp_config, f)
         return path
@@ -103,7 +102,7 @@ class CLIAgentRunner(BaseAgentRunner):
         agent: dict[str, Any],
         task_description: str,
         input_context: dict[str, Any],
-        workspace_dir: str,
+        task_scratch_dir: str,
     ) -> tuple[str, int]:
         prompt = self._build_prompt(task_description, input_context)
 
@@ -114,7 +113,7 @@ class CLIAgentRunner(BaseAgentRunner):
 
         system_prompt_path: str | None = None
         if system_prompt:
-            system_prompt_path = os.path.join(workspace_dir, ".system_prompt.md")
+            system_prompt_path = os.path.join(task_scratch_dir, ".system_prompt.md")
             with open(system_prompt_path, "w") as f:
                 f.write(system_prompt)
 
@@ -128,30 +127,22 @@ class CLIAgentRunner(BaseAgentRunner):
             cmd += ["--system-prompt-file", system_prompt_path]
 
         if delegation_enabled:
-            mcp_config_path = self._write_mcp_config(workspace_dir)
+            mcp_config_path = self._write_mcp_config(task_scratch_dir)
             cmd += ["--mcp-config", mcp_config_path]
 
-        env = {**os.environ, "WORKSPACE": workspace_dir, "PROJECT_DIR": settings.project_dir}
-
-        # Create a 'project' symlink in the workspace so agents can reference the
-        # shared project directory via a relative path (./project/) in addition to $PROJECT_DIR.
-        shared_dir = settings.project_dir
-        symlink_path = os.path.join(workspace_dir, "project")
-        if os.path.isdir(shared_dir) and not os.path.lexists(symlink_path):
-            os.symlink(shared_dir, symlink_path)
+        env = {**os.environ, "PROJECT_DIR": settings.project_dir}
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=workspace_dir,
+            cwd=settings.project_dir,
             env=env,
         )
         try:
             stdout, stderr = await proc.communicate(input=prompt.encode())
         except asyncio.CancelledError:
-            # Server is shutting down — terminate subprocess gracefully
             proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
@@ -162,7 +153,7 @@ class CLIAgentRunner(BaseAgentRunner):
 
         if proc.returncode != 0:
             raise RuntimeError(f"claude CLI exited {proc.returncode}: {stderr.decode()}")
-        return stdout.decode(), 0  # CLI runner does not expose token counts
+        return stdout.decode(), 0
 
 
 def get_runner(agent: dict[str, Any]) -> BaseAgentRunner:

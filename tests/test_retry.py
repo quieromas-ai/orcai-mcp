@@ -34,7 +34,7 @@ async def test_task_retries_on_failure(db_path) -> None:
             engine.start()
 
             result = await delegate_task(
-                agent_id=agent["id"], description="flaky work", max_retries=2
+                agent=agent["id"], description="flaky work", max_retries=2
             )
             task_id = result["task_id"]
 
@@ -66,7 +66,7 @@ async def test_task_fails_after_exhausting_retries(db_path) -> None:
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
             result = await delegate_task(
-                agent_id=agent["id"], description="doomed task", max_retries=1
+                agent=agent["id"], description="doomed task", max_retries=1
             )
             task_id = result["task_id"]
 
@@ -102,7 +102,7 @@ async def test_no_retry_when_max_retries_zero(db_path) -> None:
         with patch.object(te_module, "task_engine", engine), \
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
-            await delegate_task(agent_id=agent["id"], description="no-retry task")
+            await delegate_task(agent=agent["id"], description="no-retry task")
             await asyncio.sleep(0.3)
             await engine.stop(drain_timeout=2.0)
 
@@ -130,7 +130,7 @@ async def test_retry_increments_retry_count(db_path) -> None:
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
             result = await delegate_task(
-                agent_id=agent["id"], description="count retries", max_retries=3
+                agent=agent["id"], description="count retries", max_retries=3
             )
             task_id = result["task_id"]
 

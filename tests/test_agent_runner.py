@@ -1,4 +1,4 @@
-"""Tests for CLIAgentRunner shared workspace (PROJECT_DIR env var + symlink)."""
+"""Tests for CLIAgentRunner and APIAgentRunner."""
 
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,10 +9,10 @@ from src.agent_runner import CLIAgentRunner
 
 
 @pytest.fixture
-def workspace(tmp_path):
-    ws = str(tmp_path / "agent-workspace")
-    os.makedirs(ws, exist_ok=True)
-    return ws
+def scratch_dir(tmp_path):
+    sd = str(tmp_path / "task-scratch")
+    os.makedirs(sd, exist_ok=True)
+    return sd
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def project_dir(tmp_path):
 @pytest.fixture
 def agent():
     return {
-        "id": "test-agent-id",
+        "id": "test-agent",
         "system_prompt": "",
         "model_preference": "claude-haiku-4-5-20251001",
         "config": {},
@@ -40,61 +40,61 @@ def _fake_process(stdout: bytes = b"result") -> MagicMock:
     return proc
 
 
-class TestSharedWorkspace:
+class TestCLIAgentRunner:
     @pytest.mark.asyncio
-    async def test_project_dir_in_subprocess_env(self, workspace, project_dir, agent):
+    async def test_project_dir_in_subprocess_env(self, scratch_dir, project_dir, agent):
         mock_exec = AsyncMock(return_value=_fake_process())
         with patch("asyncio.create_subprocess_exec", mock_exec), \
              patch("src.agent_runner.settings.project_dir", project_dir), \
              patch("src.agent_runner.settings.enable_agent_delegation", False):
-            await CLIAgentRunner().run(agent, "task", {}, workspace)
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
 
         env = mock_exec.call_args.kwargs["env"]
         assert env["PROJECT_DIR"] == project_dir
 
     @pytest.mark.asyncio
-    async def test_workspace_env_still_injected(self, workspace, project_dir, agent):
+    async def test_cwd_set_to_project_dir(self, scratch_dir, project_dir, agent):
         mock_exec = AsyncMock(return_value=_fake_process())
         with patch("asyncio.create_subprocess_exec", mock_exec), \
              patch("src.agent_runner.settings.project_dir", project_dir), \
              patch("src.agent_runner.settings.enable_agent_delegation", False):
-            await CLIAgentRunner().run(agent, "task", {}, workspace)
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
 
-        env = mock_exec.call_args.kwargs["env"]
-        assert env["WORKSPACE"] == workspace
-
-    @pytest.mark.asyncio
-    async def test_project_symlink_created(self, workspace, project_dir, agent):
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_fake_process())), \
-             patch("src.agent_runner.settings.project_dir", project_dir), \
-             patch("src.agent_runner.settings.enable_agent_delegation", False):
-            await CLIAgentRunner().run(agent, "task", {}, workspace)
-
-        symlink = os.path.join(workspace, "project")
-        assert os.path.islink(symlink)
-        assert os.readlink(symlink) == project_dir
+        assert mock_exec.call_args.kwargs["cwd"] == project_dir
 
     @pytest.mark.asyncio
-    async def test_project_symlink_idempotent(self, workspace, project_dir, agent):
-        runner = CLIAgentRunner()
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_fake_process())), \
+    async def test_system_prompt_written_to_scratch_dir(self, scratch_dir, project_dir, agent):
+        agent["system_prompt"] = "You are helpful."
+        mock_exec = AsyncMock(return_value=_fake_process())
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
              patch("src.agent_runner.settings.project_dir", project_dir), \
              patch("src.agent_runner.settings.enable_agent_delegation", False):
-            await runner.run(agent, "first", {}, workspace)
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
 
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_fake_process())), \
-             patch("src.agent_runner.settings.project_dir", project_dir), \
-             patch("src.agent_runner.settings.enable_agent_delegation", False):
-            await runner.run(agent, "second", {}, workspace)  # must not raise
-
-        assert os.path.islink(os.path.join(workspace, "project"))
+        prompt_file = os.path.join(scratch_dir, ".system_prompt.md")
+        assert os.path.isfile(prompt_file)
+        with open(prompt_file) as f:
+            assert "You are helpful." in f.read()
 
     @pytest.mark.asyncio
-    async def test_no_symlink_when_project_dir_missing(self, workspace, agent):
-        nonexistent = "/tmp/__orcai_no_such_project_dir_xyz__"
-        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=_fake_process())), \
-             patch("src.agent_runner.settings.project_dir", nonexistent), \
+    async def test_no_system_prompt_file_when_empty(self, scratch_dir, project_dir, agent):
+        agent["system_prompt"] = ""
+        mock_exec = AsyncMock(return_value=_fake_process())
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
              patch("src.agent_runner.settings.enable_agent_delegation", False):
-            await CLIAgentRunner().run(agent, "task", {}, workspace)
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
 
-        assert not os.path.lexists(os.path.join(workspace, "project"))
+        prompt_file = os.path.join(scratch_dir, ".system_prompt.md")
+        assert not os.path.isfile(prompt_file)
+
+    @pytest.mark.asyncio
+    async def test_mcp_config_written_to_scratch_dir(self, scratch_dir, project_dir, agent):
+        mock_exec = AsyncMock(return_value=_fake_process())
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
+             patch("src.agent_runner.settings.enable_agent_delegation", True):
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
+
+        mcp_file = os.path.join(scratch_dir, ".mcp-delegate.json")
+        assert os.path.isfile(mcp_file)

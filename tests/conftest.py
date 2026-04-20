@@ -7,19 +7,40 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-# Use temp dirs for tests
-os.environ["WORKSPACE_DIR"] = "/tmp/orcai_test_workspace"
-os.environ["SKILLS_DIR"] = "/tmp/orcai_test_skills"
+# Use temp dirs for tests — set BEFORE any src.* imports so Settings picks them up
+os.environ["CLAUDE_DIR"] = "/tmp/orcai_test_claude"
+os.environ["DATA_DIR"] = "/tmp/orcai_test_data"
 os.environ["PROJECT_DIR"] = "/tmp/orcai_test_project"
 os.environ["MCP_AUTH_DISABLED"] = "true"
 os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
 
+@pytest.fixture
+def claude_dir_path(tmp_path):
+    """Fresh .claude/agents + .claude/skills + writable data_dir per test."""
+    import src.agent_registry as registry_module
+    import src.config as cfg_module
+
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "skills").mkdir()
+    (tmp_path / "data").mkdir()
+
+    orig_claude = cfg_module.settings.claude_dir
+    orig_data = cfg_module.settings.data_dir
+    cfg_module.settings.claude_dir = str(tmp_path)
+    cfg_module.settings.data_dir = str(tmp_path / "data")
+    registry_module.clear_cache()
+    yield str(tmp_path)
+    cfg_module.settings.claude_dir = orig_claude
+    cfg_module.settings.data_dir = orig_data
+    registry_module.clear_cache()
+
+
 @pytest_asyncio.fixture
-async def db_path(tmp_path):
-    """Initialise a fresh in-file SQLite DB per test."""
+async def db_path(tmp_path, claude_dir_path):
+    """Initialise a fresh in-file SQLite DB per test (also sets up claude_dir)."""
     import src.database as db_module
-    db_module._db = None  # reset global connection
+    db_module._db = None
 
     path = str(tmp_path / "test.db")
     from src.database import close_database, init_database
@@ -41,13 +62,7 @@ async def async_client(db_path) -> AsyncIterator[AsyncClient]:
     with patch.object(te_module, "task_engine", fresh_engine), \
          patch.object(mcp_module, "task_engine", fresh_engine):
         from src.main import app
-        # The FastAPI lifespan is not triggered by ASGITransport, so drive
-        # session_manager.run() manually. anyio cancel scopes must be entered
-        # and exited in the same asyncio task, so we run the session manager in
-        # a dedicated background task and signal it to stop after each test.
         sm = mcp_module.mcp.session_manager
-        # StreamableHTTPSessionManager.run() can only be called once per
-        # instance; reset the private flag so each test gets a fresh run.
         sm._has_started = False
         stop_event: asyncio.Event = asyncio.Event()
         ready_event: asyncio.Event = asyncio.Event()
@@ -61,7 +76,9 @@ async def async_client(db_path) -> AsyncIterator[AsyncClient]:
         await ready_event.wait()
 
         try:
-            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
                 yield client
         finally:
             stop_event.set()

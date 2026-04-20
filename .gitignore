@@ -32,6 +32,7 @@ htmlcov/
 data/
 workspace/
 skills/
+!examples/skills/
 
 # IDE-generated MCP config
 .mcp.json

@@ -4,23 +4,17 @@ from typing import Any
 
 import aiosqlite
 
+from src.agent_registry import get_agent
 from src.config import settings
 
 _db: aiosqlite.Connection | None = None
 
-CREATE_AGENTS = """
-CREATE TABLE IF NOT EXISTS agents (
-    id TEXT PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
-    role TEXT NOT NULL DEFAULT '',
+CREATE_AGENTS_STATE = """
+CREATE TABLE IF NOT EXISTS agents_state (
+    slug TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'idle',
-    system_prompt TEXT NOT NULL DEFAULT '',
-    model_preference TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
-    runner TEXT NOT NULL DEFAULT 'api',
-    skills TEXT NOT NULL DEFAULT '[]',
-    config TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    last_run_at TEXT,
+    last_task_id TEXT
 )
 """
 
@@ -38,19 +32,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     retry_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     started_at TEXT,
-    completed_at TEXT,
-    FOREIGN KEY (agent_id) REFERENCES agents(id)
-)
-"""
-
-CREATE_SKILLS = """
-CREATE TABLE IF NOT EXISTS skills (
-    id TEXT PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    file_path TEXT NOT NULL,
-    version TEXT NOT NULL DEFAULT '1.0.0',
-    installed_at TEXT NOT NULL
+    completed_at TEXT
 )
 """
 
@@ -64,16 +46,38 @@ async def init_database(db_path: str = "") -> None:
     _db.row_factory = aiosqlite.Row
     await _db.execute("PRAGMA journal_mode=WAL")
     await _db.execute("PRAGMA foreign_keys=ON")
-    await _db.execute(CREATE_AGENTS)
+    await _db.execute(CREATE_AGENTS_STATE)
     await _db.execute(CREATE_TASKS)
-    await _db.execute(CREATE_SKILLS)
     await _db.commit()
+    await _migrate_remove_agents_fk(_db)
 
 
 async def get_db() -> aiosqlite.Connection:
     if _db is None:
         raise RuntimeError("Database not initialised — call init_database() first")
     return _db
+
+
+async def _migrate_remove_agents_fk(db: aiosqlite.Connection) -> None:
+    """Drop the stale FOREIGN KEY (agent_id) REFERENCES agents(id) from tasks.
+
+    The agents table was removed when the registry moved to .claude/ files, but
+    old DBs still have the FK defined. With foreign_keys=ON every INSERT fails.
+    SQLite has no DROP CONSTRAINT, so we recreate the table without it.
+    """
+    query = "SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'"
+    async with db.execute(query) as cur:
+        row = await cur.fetchone()
+    if row and "REFERENCES agents" in row[0]:
+        await db.execute("ALTER TABLE tasks RENAME TO tasks_old")
+        await db.execute(CREATE_TASKS)
+        await db.execute(
+            "INSERT INTO tasks SELECT id, agent_id, description, status, priority, "
+            "input_context, output, error, max_retries, retry_count, created_at, "
+            "started_at, completed_at FROM tasks_old"
+        )
+        await db.execute("DROP TABLE tasks_old")
+        await db.commit()
 
 
 async def close_database() -> None:
@@ -97,11 +101,14 @@ def parse_json_fields(d: dict[str, Any], *fields: str) -> dict[str, Any]:
     return d
 
 
-async def fetch_agent(agent_id: str) -> dict[str, Any]:
-    """Load an agent by ID, raising ``ValueError`` if not found."""
+async def fetch_agent(slug: str) -> dict[str, Any]:
+    """Load an agent by slug from the registry, enriched with runtime status."""
+    agent = get_agent(slug)  # raises ValueError if not found
     db = await get_db()
-    async with db.execute("SELECT * FROM agents WHERE id=?", (agent_id,)) as cur:
+    async with db.execute(
+        "SELECT status FROM agents_state WHERE slug=?", (slug,)
+    ) as cur:
         row = await cur.fetchone()
-    if not row:
-        raise ValueError(f"Agent '{agent_id}' not found")
-    return parse_json_fields(row_to_dict(row), "config", "skills")
+    if row:
+        agent["status"] = row[0]
+    return agent

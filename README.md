@@ -37,12 +37,12 @@ Anthropic API  /  Claude Code CLI subprocess
 
 ## Features
 
-- **8 MCP tools** — add, update, list, and prompt agents; delegate tasks with priority and retry; install skills
+- **9 MCP tools** — add, update, list, and prompt agents; delegate tasks with priority and retry; install skills; retrieve agent task logs
 - **Task queue** — configurable concurrency limit and queue depth; priority ordering (1–5); exponential-backoff retries
 - **Two execution modes** — call the Anthropic API directly (`runner: api`) or spawn the Claude Code CLI as a subprocess (`runner: cli`)
 - **Shared project workspace** — CLI agents automatically receive `$PROJECT_DIR` in their environment and a `project/` symlink in their working directory pointing at the project root, enabling all agents to read and write shared files
 - **React UI** — dashboard, agent editor with system-prompt editing, task history, skills library
-- **CLI** — `orcai-mcp init / up / down / register / add / delegate / status / logs`
+- **CLI** — `orcai-mcp init / up / down / register / add / list / delegate / status / logs / migrate-to-claude`
 - **IDE auto-registration** — writes `.mcp.json` (Claude Code) or `.cursor/mcp.json` (Cursor) for you
 - **Graceful shutdown** — in-flight tasks drain before the process exits
 - **Structured JSON logging** — all task lifecycle events emitted as JSON
@@ -92,8 +92,7 @@ ANTHROPIC_API_KEY=
 
 # Keep paths local to the project folder (not Docker volume paths)
 DATA_DIR=./data
-WORKSPACE_DIR=./workspace
-SKILLS_DIR=./skills
+CLAUDE_DIR=./.claude
 PROJECT_DIR=.
 
 # Auth disabled for local dev — fine as-is
@@ -286,13 +285,14 @@ Claude Code:
   → delegate_task(agent_id="...", description="Write a /health endpoint
                    that returns {status: ok, version: ...}")
   → check_task_status(task_id="...")
-  → [reads output from .claude/agents/outputs/{task_id}/result.json]
+  → [reads output from .{IDE_TARGET}/agents/outputs/{task_id}/result.json]
+  → (see Artifact output section for details)
 ```
 
 ### CLI
 
 ```bash
-# List registered agents
+# List configured agents (reads .claude/agents/*.md)
 orcai-mcp list
 
 # Add an agent from a system prompt file
@@ -306,6 +306,9 @@ orcai-mcp status <task-id>
 
 # Show recent logs for an agent
 orcai-mcp logs <agent-id>
+
+# One-shot migration from legacy SQLite-backed registry
+orcai-mcp migrate-to-claude [--dry-run] [--claude-dir PATH] [--db PATH] [--no-backup]
 ```
 
 ### MCP tools reference
@@ -318,10 +321,70 @@ orcai-mcp logs <agent-id>
 | `get_active_agents` | List agents currently executing a task |
 | `delegate_task` | Assign a task to an agent; queued if agent is busy |
 | `check_task_status` | Poll the status and output of a delegated task |
+| `get_agent_logs` | Return the last N task records for an agent as a structured activity log |
 | `install_skill` | Install a Markdown skill file and optionally assign to agents |
 | `prompt_agent` | Send an ad-hoc message to an agent and wait for a response |
 
 Full parameter documentation is available via MCP resource discovery or at `/api/v1/docs`.
+
+---
+
+## Agent & skill file format (.claude/ registry)
+
+Agents and skills are plain Markdown files with YAML frontmatter stored under `CLAUDE_DIR`. The server, Claude Code, and Cursor all read from the same source of truth — no database sync required.
+
+**Agent file** — `{CLAUDE_DIR}/agents/<slug>.md`
+
+```markdown
+---
+name: backend-engineer
+description: ''
+model: claude-sonnet-4-6
+role: backend
+runner: cli
+skills: []
+---
+
+You are a Backend Engineer. ...
+```
+
+**Skill file** — `{CLAUDE_DIR}/skills/<name>/SKILL.md`
+
+```markdown
+---
+name: react-component
+description: Writing accessible React components
+version: 1.0.0
+installed_at: '2026-04-20T18:55:57+00:00'
+---
+
+# React component skill
+...
+```
+
+The `skills:` list in an agent's frontmatter references skill slugs that must exist under `{CLAUDE_DIR}/skills/<name>/`. The SQLite database (`{DATA_DIR}/orcai.db`) holds only ephemeral runtime state (`tasks`, `agents_state`) — safe to delete to reset state without losing agent definitions.
+
+---
+
+## Migrating from an older install
+
+If you upgraded from a version where agents and skills were stored in SQLite, run the migration command to export them as `.claude/` files:
+
+```bash
+orcai-mcp migrate-to-claude --dry-run    # preview what will be written
+orcai-mcp migrate-to-claude               # real run (creates .premigrate.bak backup)
+```
+
+Flags:
+
+| Flag | Description |
+|---|---|
+| `--db PATH` | Path to the legacy SQLite database (default: `{DATA_DIR}/orcai.db`) |
+| `--claude-dir PATH` | Destination for the new files (default: `{CLAUDE_DIR}`) |
+| `--dry-run` | Print what would be written without creating files |
+| `--no-backup` | Skip creating the `.premigrate.bak` backup |
+
+A separate auto-migration runs on every server start (`src/database.py`) to drop a stale foreign-key constraint left over in old databases — this runs transparently with no user action needed.
 
 ---
 
@@ -338,11 +401,12 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `MAX_CONCURRENT_AGENTS` | `3` | Max simultaneous agent tasks |
 | `TASK_QUEUE_SIZE` | `20` | Max queued tasks before rejecting |
 | `ANTHROPIC_API_KEY` | _(required for api runner)_ | Anthropic API key |
-| `DATA_DIR` | `/data` | SQLite database location |
-| `WORKSPACE_DIR` | `/workspace` | Agent working directories |
-| `SKILLS_DIR` | `/skills` | Installed skill Markdown files |
+| `DATA_DIR` | `/data` | SQLite database location (ephemeral runtime state only) |
+| `CLAUDE_DIR` | `/project/.claude` | Root for the file-based registry: agents live at `{CLAUDE_DIR}/agents/<slug>.md`, skills at `{CLAUDE_DIR}/skills/<name>/SKILL.md`. Required; the hardcoded default only works inside the Docker container. |
+| `WORKSPACE_DIR` | `/workspace` | _(deprecated — no longer read by the server; kept for backward compatibility with older `.env` files)_ |
+| `SKILLS_DIR` | `/skills` | _(deprecated — no longer read by the server; kept for backward compatibility with older `.env` files)_ |
 | `PROJECT_DIR` | `.` | Project root — artifacts are written here; also exposed to CLI agents as `$PROJECT_DIR` and a `project/` symlink in each agent's workspace |
-|| `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated allowed `Host` header values for DNS rebinding protection. Required when behind a reverse proxy — set to your public domain (e.g. `mcp.yourserver.com`). Empty disables the check. |
+| `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated allowed `Host` header values for DNS rebinding protection. Required when behind a reverse proxy — set to your public domain (e.g. `mcp.yourserver.com`). Empty disables the check. |
 | `ENABLE_AGENT_DELEGATION` | `true` | When enabled, CLI-runner agents can delegate tasks to sibling agents via a restricted MCP endpoint. |
 
 ---
@@ -409,7 +473,7 @@ CLI-runner agents can delegate tasks to sibling agents. When `ENABLE_AGENT_DELEG
 
 ```
 IDE (Claude Code / Cursor)
-    │  MCP /mcp (all 8 tools)
+    │  MCP /mcp (all 9 tools)
     ▼
 orcai-mcp container  :8100
     │  spawns CLI subprocesses
@@ -494,17 +558,30 @@ Override the base directory with the `PROJECT_DIR` environment variable.
 
 ## Example agent system prompts
 
-The `examples/agents/` directory contains ready-to-use system prompts:
+The `examples/agents/` directory contains ready-to-use agent definitions:
 
 - `frontend-dev.md` — React/TypeScript component development
 - `backend-dev.md` — Python FastAPI endpoint development
 
-Use them with:
+Both files include YAML frontmatter matching the `.claude/` registry format. You can use them in two ways:
+
+**Option 1 — copy directly into `.claude/agents/` (preferred):**
+
+```bash
+cp examples/agents/frontend-dev.md .claude/agents/frontend-dev.md
+cp examples/agents/backend-dev.md  .claude/agents/backend-dev.md
+```
+
+The server reads these immediately — no restart or registration step needed.
+
+**Option 2 — register via CLI:**
 
 ```bash
 orcai-mcp add "Frontend Dev" --role frontend --prompt examples/agents/frontend-dev.md
 orcai-mcp add "Backend Dev"  --role backend  --prompt examples/agents/backend-dev.md
 ```
+
+The `examples/skills/` directory also contains a ready-to-use skill example (`react-component/SKILL.md`). Copy the directory into `{CLAUDE_DIR}/skills/` to install it.
 
 ---
 
@@ -558,8 +635,7 @@ The default `DATA_DIR` is `/data`, which is a Docker volume path. For local inst
 
 ```bash
 DATA_DIR=./data
-WORKSPACE_DIR=./workspace
-SKILLS_DIR=./skills
+CLAUDE_DIR=./.claude
 PROJECT_DIR=.
 ```
 

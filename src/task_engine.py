@@ -3,16 +3,18 @@ import itertools
 import json
 import logging
 import os
+import shutil
 from datetime import UTC, datetime
 from typing import Any
 
 from src.agent_runner import get_runner
 from src.config import settings
+from src.database import fetch_agent, get_db, parse_json_fields, row_to_dict
 
 logger = logging.getLogger(__name__)
 
 _task_counter = itertools.count()
-DRAIN_TIMEOUT = 30.0  # seconds to wait for running tasks on shutdown
+DRAIN_TIMEOUT = 30.0
 
 
 class QueueFullError(Exception):
@@ -28,7 +30,6 @@ class TaskEngine:
         self._running = False
 
     def start(self) -> None:
-        # Bind queue and semaphore to the current running event loop
         self._queue = asyncio.PriorityQueue()
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_agents)
         self._active_tasks = set()
@@ -36,10 +37,8 @@ class TaskEngine:
         self._worker_task = asyncio.create_task(self._worker())
 
     async def stop(self, drain_timeout: float = DRAIN_TIMEOUT) -> None:
-        """Stop accepting new tasks, drain in-flight tasks, then shut down."""
         self._running = False
 
-        # Stop the queue-reader coroutine
         if self._worker_task:
             self._worker_task.cancel()
             try:
@@ -47,7 +46,6 @@ class TaskEngine:
             except (TimeoutError, asyncio.CancelledError):
                 pass
 
-        # Wait for all active task coroutines to finish (including retries spawned mid-drain)
         if self._active_tasks:
             n = len(self._active_tasks)
             logger.info(
@@ -59,8 +57,6 @@ class TaskEngine:
                 remaining_time = deadline - loop.time()
                 if remaining_time <= 0:
                     break
-                # asyncio.wait properly suspends the coroutine and allows other tasks to run;
-                # re-check _active_tasks each iteration to pick up retries spawned mid-drain
                 await asyncio.wait(
                     list(self._active_tasks),
                     timeout=min(0.1, remaining_time),
@@ -73,7 +69,6 @@ class TaskEngine:
                 )
                 for t in list(self._active_tasks):
                     t.cancel()
-                # Give cancelled coroutines a moment to clean up subprocesses
                 await asyncio.gather(*list(self._active_tasks), return_exceptions=True)
             else:
                 logger.info("All tasks drained cleanly")
@@ -85,7 +80,6 @@ class TaskEngine:
         return len(self._active_tasks)
 
     async def submit(self, task_id: str, priority: int) -> None:
-        """Enqueue a task by ID. Priority 5=critical, 1=low — invert for min-heap."""
         if self._queue is None:
             raise RuntimeError("TaskEngine not started — call start() first")
         if self._queue.qsize() >= settings.task_queue_size:
@@ -109,8 +103,6 @@ class TaskEngine:
             t.add_done_callback(self._active_tasks.discard)
 
     async def _run_task(self, task_id: str) -> None:
-        from src.database import get_db, parse_json_fields, row_to_dict
-
         async with self._semaphore:  # type: ignore[union-attr]
             db = await get_db()
 
@@ -121,14 +113,13 @@ class TaskEngine:
                 return
 
             task = parse_json_fields(row_to_dict(row), "input_context", "output")
+            agent_slug: str = task["agent_id"]
 
-            async with db.execute("SELECT * FROM agents WHERE id=?", (task["agent_id"],)) as cur:
-                agent_row = await cur.fetchone()
-            if not agent_row:
-                await self._fail_task(db, task, "Agent not found")
+            try:
+                agent = await fetch_agent(agent_slug)
+            except ValueError:
+                await self._fail_task(db, task, f"Agent '{agent_slug}' not found")
                 return
-
-            agent = parse_json_fields(row_to_dict(agent_row), "config", "skills")
 
             now = datetime.now(UTC).isoformat()
             await db.execute(
@@ -136,13 +127,21 @@ class TaskEngine:
                 (now, task_id),
             )
             await db.execute(
-                "UPDATE agents SET status='busy', updated_at=? WHERE id=?",
-                (now, agent["id"]),
+                """
+                INSERT INTO agents_state (slug, status, last_run_at, last_task_id)
+                VALUES (?, 'busy', ?, ?)
+                ON CONFLICT(slug) DO UPDATE SET
+                    status='busy', last_run_at=excluded.last_run_at,
+                    last_task_id=excluded.last_task_id
+                """,
+                (agent_slug, now, task_id),
             )
             await db.commit()
 
-            workspace_dir = os.path.abspath(os.path.join(settings.workspace_dir, agent["id"]))
-            os.makedirs(workspace_dir, exist_ok=True)
+            task_scratch_dir = os.path.abspath(
+                os.path.join(settings.data_dir, "task-scratch", task_id)
+            )
+            os.makedirs(task_scratch_dir, exist_ok=True)
 
             try:
                 runner = get_runner(agent)
@@ -150,36 +149,38 @@ class TaskEngine:
                     agent=agent,
                     task_description=task["description"],
                     input_context=task.get("input_context") or {},
-                    workspace_dir=workspace_dir,
+                    task_scratch_dir=task_scratch_dir,
                 )
-                await self._complete_task(db, task, agent, result, tokens)
+                await self._complete_task(db, task, agent_slug, result, tokens)
 
             except asyncio.CancelledError:
-                # Shutdown drain cancelled this coroutine — mark as failed + reset agent
                 logger.warning("task_cancelled_on_shutdown", extra={"task_id": task_id})
                 await self._fail_task(db, task, "Cancelled: server shutdown")
-                await db.execute(
-                    "UPDATE agents SET status='idle', updated_at=? WHERE id=?",
-                    (datetime.now(UTC).isoformat(), agent["id"]),
-                )
-                await db.commit()
-                raise  # re-raise so asyncio.gather sees it
+                await self._set_agent_idle(db, agent_slug)
+                raise
 
             except Exception as exc:
                 retry_count: int = task.get("retry_count", 0)
                 max_retries: int = task.get("max_retries", 0)
                 if retry_count < max_retries:
-                    await self._retry_task(db, task, str(exc))
+                    await self._retry_task(db, task, agent_slug, str(exc))
                 else:
                     await self._fail_task(db, task, str(exc))
-                await db.execute(
-                    "UPDATE agents SET status='idle', updated_at=? WHERE id=?",
-                    (datetime.now(UTC).isoformat(), agent["id"]),
-                )
-                await db.commit()
+                await self._set_agent_idle(db, agent_slug)
+
+            finally:
+                shutil.rmtree(task_scratch_dir, ignore_errors=True)
+
+    async def _set_agent_idle(self, db: Any, slug: str) -> None:
+        now = datetime.now(UTC).isoformat()
+        await db.execute(
+            "UPDATE agents_state SET status='idle', last_run_at=? WHERE slug=?",
+            (now, slug),
+        )
+        await db.commit()
 
     async def _complete_task(
-        self, db: Any, task: dict[str, Any], agent: dict[str, Any], result: str, tokens: int = 0
+        self, db: Any, task: dict[str, Any], agent_slug: str, result: str, tokens: int = 0
     ) -> None:
         now = datetime.now(UTC).isoformat()
         output = {"text": result, "tokens_used": tokens}
@@ -190,14 +191,11 @@ class TaskEngine:
             "UPDATE tasks SET status='completed', output=?, completed_at=? WHERE id=?",
             (json.dumps(output), now, task["id"]),
         )
-        await db.execute(
-            "UPDATE agents SET status='idle', updated_at=? WHERE id=?",
-            (now, agent["id"]),
-        )
         await db.commit()
+        await self._set_agent_idle(db, agent_slug)
         logger.info(
             "task_completed",
-            extra={"task_id": task["id"], "agent_id": agent["id"]},
+            extra={"task_id": task["id"], "agent_slug": agent_slug},
         )
 
     async def _fail_task(self, db: Any, task: dict[str, Any], error: str) -> None:
@@ -212,9 +210,11 @@ class TaskEngine:
             extra={"task_id": task["id"], "error": error},
         )
 
-    async def _retry_task(self, db: Any, task: dict[str, Any], error: str) -> None:
+    async def _retry_task(
+        self, db: Any, task: dict[str, Any], agent_slug: str, error: str
+    ) -> None:
         retry_count: int = task.get("retry_count", 0) + 1
-        delay = 2 ** retry_count  # exponential backoff in seconds
+        delay = 2 ** retry_count
         logger.warning(
             "task_retrying",
             extra={"task_id": task["id"], "attempt": retry_count, "delay_s": delay, "error": error},
@@ -225,13 +225,11 @@ class TaskEngine:
             (retry_count, task["id"]),
         )
         await db.execute(
-            "UPDATE agents SET status='idle', updated_at=? WHERE id=?",
-            (now, task["agent_id"]),
+            "UPDATE agents_state SET status='idle', last_run_at=? WHERE slug=?",
+            (now, agent_slug),
         )
         await db.commit()
 
-        # Schedule the retry as a tracked coroutine — NOT via the queue — so that
-        # stop()/drain knows to wait for it even after the worker has been cancelled.
         task_id = task["id"]
 
         async def _delayed_retry() -> None:

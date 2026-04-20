@@ -27,7 +27,7 @@ async def test_stop_waits_for_active_tasks(db_path) -> None:
         with patch.object(te_module, "task_engine", engine), \
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
-            result = await delegate_task(agent_id=agent["id"], description="slow task")
+            result = await delegate_task(agent=agent["id"], description="slow task")
             task_id = result["task_id"]
 
             # Give worker a moment to pick up and start the task
@@ -59,7 +59,7 @@ async def test_stop_cancels_on_timeout(db_path) -> None:
         with patch.object(te_module, "task_engine", engine), \
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
-            result = await delegate_task(agent_id=agent["id"], description="never ends")
+            result = await delegate_task(agent=agent["id"], description="never ends")
             task_id = result["task_id"]
 
             await asyncio.sleep(0.05)
@@ -96,9 +96,9 @@ async def test_queue_not_drained_after_stop(db_path) -> None:
             engine.start()
             # Saturate the semaphore (MAX_CONCURRENT_AGENTS=3 in test env)
             for _ in range(3):
-                await delegate_task(agent_id=agent["id"], description="concurrent")
+                await delegate_task(agent=agent["id"], description="concurrent")
             # Queue one more beyond concurrency
-            await delegate_task(agent_id=agent["id"], description="queued extra")
+            await delegate_task(agent=agent["id"], description="queued extra")
 
             await asyncio.sleep(0.05)
             await engine.stop(drain_timeout=2.0)
@@ -125,7 +125,7 @@ async def test_active_count(db_path) -> None:
         with patch.object(te_module, "task_engine", engine), \
              patch.object(mcp_module, "task_engine", engine):
             engine.start()
-            await delegate_task(agent_id=agent["id"], description="gated task")
+            await delegate_task(agent=agent["id"], description="gated task")
             await asyncio.wait_for(started.wait(), timeout=2.0)
 
             assert engine.active_count() >= 1
