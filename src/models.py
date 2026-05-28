@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 AgentStatus = Literal["idle", "busy", "disabled"]
 TaskStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 AgentRunner = Literal["api", "cli"]
+MemoryScope = Literal["user", "project", "local"]
 
 
 class AgentCreate(BaseModel):
@@ -12,6 +13,7 @@ class AgentCreate(BaseModel):
     role: str = ""
     system_prompt: str = ""
     model_preference: str = "claude-sonnet-4-6"
+    memory: MemoryScope | None = None
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -21,6 +23,7 @@ class AgentUpdate(BaseModel):
     system_prompt: str | None = None
     model_preference: str | None = None
     status: AgentStatus | None = None
+    memory: MemoryScope | None = None
     config: dict[str, Any] | None = None
 
 
@@ -33,6 +36,7 @@ class AgentResponse(BaseModel):
     model_preference: str
     runner: AgentRunner
     skills: list[str]
+    memory: MemoryScope | None = None
     config: dict[str, Any]
     created_at: str
     updated_at: str

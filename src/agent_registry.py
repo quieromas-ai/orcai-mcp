@@ -47,6 +47,13 @@ def _parse_agent_file(path: str) -> dict[str, Any]:
     slug = os.path.splitext(os.path.basename(path))[0]
     fm = post.metadata
     runner = fm.get("runner", "api")
+    memory_raw = fm.get("memory", None)
+    memory: str | None = memory_raw if memory_raw in ("user", "project", "local") else None
+    if memory_raw is not None and memory is None:
+        logger.warning(
+            "agent_invalid_memory_scope",
+            extra={"path": path, "memory": memory_raw},
+        )
     agent: dict[str, Any] = {
         "id": slug,
         "name": fm.get("name", slug),
@@ -57,6 +64,7 @@ def _parse_agent_file(path: str) -> dict[str, Any]:
         "model_preference": fm.get("model", "claude-sonnet-4-6"),
         "runner": runner,
         "skills": fm.get("skills", []),
+        "memory": memory,
         "config": {"runner": runner},
         "created_at": _ctime_str(path),
         "updated_at": _mtime_str(path),
@@ -101,6 +109,7 @@ def write_agent(
     model: str = "claude-sonnet-4-6",
     runner: str = "api",
     skills: list[str] | None = None,
+    memory: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write .claude/agents/<slug>.md and return the parsed agent dict."""
@@ -116,6 +125,8 @@ def write_agent(
         "runner": runner,
         "skills": skills or [],
     }
+    if memory is not None:
+        fm["memory"] = memory
     if extra:
         fm.update(extra)
 
@@ -137,6 +148,7 @@ def update_agent(
     model: str | None = None,
     runner: str | None = None,
     skills: list[str] | None = None,
+    memory: str | None = None,
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Patch an existing agent .md file in place."""
@@ -157,6 +169,8 @@ def update_agent(
         post.metadata["model"] = model
     if skills is not None:
         post.metadata["skills"] = skills
+    if memory is not None:
+        post.metadata["memory"] = memory
     if runner is not None:
         post.metadata["runner"] = runner
     elif config and "runner" in config:

@@ -233,3 +233,58 @@ def test_list_skills_skips_malformed(claude_dir_path, caplog):
         skills = list_skills()
     assert skills == []
     assert any("skill_parse_failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# memory frontmatter field
+# ---------------------------------------------------------------------------
+
+
+def test_write_agent_with_memory_project(claude_dir_path):
+    agent = write_agent("mem-agent", name="Mem Agent", memory="project")
+    assert agent["memory"] == "project"
+
+
+def test_write_agent_with_memory_user(claude_dir_path):
+    agent = write_agent("mem-user", name="Mem User", memory="user")
+    assert agent["memory"] == "user"
+
+
+def test_write_agent_with_memory_local(claude_dir_path):
+    agent = write_agent("mem-local", name="Mem Local", memory="local")
+    assert agent["memory"] == "local"
+
+
+def test_write_agent_no_memory_defaults_none(claude_dir_path):
+    agent = write_agent("no-mem", name="No Mem")
+    assert agent["memory"] is None
+
+
+def test_memory_persisted_in_frontmatter(claude_dir_path):
+    write_agent("persisted", name="Persisted", memory="project")
+    path = Path(claude_dir_path) / "agents" / "persisted.md"
+    with open(path) as f:
+        post = frontmatter.load(f)
+    assert post.metadata["memory"] == "project"
+
+
+def test_update_agent_sets_memory(claude_dir_path):
+    write_agent("upd-mem", name="Upd Mem")
+    updated = update_agent("upd-mem", memory="local")
+    assert updated["memory"] == "local"
+
+
+def test_invalid_memory_scope_returns_none(claude_dir_path, caplog):
+    path = Path(claude_dir_path) / "agents" / "bad-mem.md"
+    post = frontmatter.Post("content", name="bad-mem", memory="global")
+    path.write_text(frontmatter.dumps(post))
+    with caplog.at_level("WARNING", logger="src.agent_registry"):
+        agent = get_agent("bad-mem")
+    assert agent["memory"] is None
+    assert any("agent_invalid_memory_scope" in r.message for r in caplog.records)
+
+
+def test_get_agent_roundtrip_includes_memory(claude_dir_path):
+    write_agent("rt-mem", name="RT Mem", memory="user")
+    fetched = get_agent("rt-mem")
+    assert fetched["memory"] == "user"

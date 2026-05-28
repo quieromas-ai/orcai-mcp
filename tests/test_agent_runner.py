@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.agent_runner import CLIAgentRunner
+from src.agent_runner import BaseAgentRunner, CLIAgentRunner
 
 
 @pytest.fixture
@@ -98,3 +98,84 @@ class TestCLIAgentRunner:
 
         mcp_file = os.path.join(scratch_dir, ".mcp-delegate.json")
         assert os.path.isfile(mcp_file)
+
+    @pytest.mark.asyncio
+    async def test_memory_adds_dir_flag(self, scratch_dir, project_dir, agent, tmp_path):
+        agent["memory"] = "project"
+        mock_exec = AsyncMock(return_value=_fake_process())
+        claude_dir = str(tmp_path / ".claude")
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
+             patch("src.agent_runner.settings.claude_dir", claude_dir), \
+             patch("src.agent_runner.settings.enable_agent_delegation", False):
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
+
+        cmd = list(mock_exec.call_args.args)
+        assert "--add-dir" in cmd
+        add_dir_idx = cmd.index("--add-dir")
+        assert "agent-memory" in cmd[add_dir_idx + 1]
+
+    @pytest.mark.asyncio
+    async def test_no_memory_no_add_dir_flag(self, scratch_dir, project_dir, agent):
+        mock_exec = AsyncMock(return_value=_fake_process())
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
+             patch("src.agent_runner.settings.enable_agent_delegation", False):
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
+
+        cmd = list(mock_exec.call_args.args)
+        assert "--add-dir" not in cmd
+
+    @pytest.mark.asyncio
+    async def test_memory_injects_instructions_into_system_prompt(
+        self, scratch_dir, project_dir, agent, tmp_path
+    ):
+        agent["system_prompt"] = "Base prompt."
+        agent["memory"] = "project"
+        mock_exec = AsyncMock(return_value=_fake_process())
+        claude_dir = str(tmp_path / ".claude")
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
+             patch("src.agent_runner.settings.claude_dir", claude_dir), \
+             patch("src.agent_runner.settings.enable_agent_delegation", False):
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
+
+        prompt_file = os.path.join(scratch_dir, ".system_prompt.md")
+        with open(prompt_file) as f:
+            contents = f.read()
+        assert "Base prompt." in contents
+        assert "MEMORY.md" in contents
+
+
+class TestAugmentSystemPrompt:
+    def test_no_memory_returns_base(self):
+        agent = {"id": "a", "system_prompt": "Base.", "memory": None}
+        with patch("src.agent_runner.settings.claude_dir", "/tmp"):
+            result = BaseAgentRunner._augment_system_prompt(agent)
+        assert result == "Base."
+
+    def test_missing_memory_key_returns_base(self):
+        agent = {"id": "a", "system_prompt": "Base."}
+        with patch("src.agent_runner.settings.claude_dir", "/tmp"):
+            result = BaseAgentRunner._augment_system_prompt(agent)
+        assert result == "Base."
+
+    def test_invalid_scope_returns_base(self):
+        agent = {"id": "a", "system_prompt": "Base.", "memory": "global"}
+        with patch("src.agent_runner.settings.claude_dir", "/tmp"):
+            result = BaseAgentRunner._augment_system_prompt(agent)
+        assert result == "Base."
+
+    def test_valid_scope_appends_memory_block(self, tmp_path):
+        agent = {"id": "my-agent", "system_prompt": "Base.", "memory": "project"}
+        with patch("src.agent_runner.settings.claude_dir", str(tmp_path)):
+            result = BaseAgentRunner._augment_system_prompt(agent)
+        assert "Base." in result
+        assert "MEMORY.md" in result
+        assert "agent-memory" in result
+
+    def test_empty_base_prompt_with_memory(self, tmp_path):
+        agent = {"id": "my-agent", "system_prompt": "", "memory": "local"}
+        with patch("src.agent_runner.settings.claude_dir", str(tmp_path)):
+            result = BaseAgentRunner._augment_system_prompt(agent)
+        assert "MEMORY.md" in result

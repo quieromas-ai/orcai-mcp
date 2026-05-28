@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from src.config import settings
+from src.memory_manager import build_memory_prompt, resolve_memory_dir
 
 
 class BaseAgentRunner(ABC):
@@ -15,6 +16,20 @@ class BaseAgentRunner(ABC):
         if input_context:
             return f"{task_description}\n\nContext:\n{json.dumps(input_context, indent=2)}"
         return task_description
+
+    @staticmethod
+    def _augment_system_prompt(agent: dict[str, Any]) -> str:
+        """Return system prompt with memory block appended when agent has memory scope."""
+        base: str = agent.get("system_prompt") or ""
+        scope: str | None = agent.get("memory")
+        if not scope or scope not in ("user", "project", "local"):
+            return base
+        memory_block = build_memory_prompt(
+            agent_name=agent["id"],
+            scope=scope,  # type: ignore[arg-type]
+            claude_dir=settings.claude_dir,
+        )
+        return f"{base}{memory_block}" if base else memory_block
 
     @abstractmethod
     async def run(
@@ -45,6 +60,7 @@ class APIAgentRunner(BaseAgentRunner):
 
         config: dict[str, Any] = agent.get("config") or {}
         max_tokens: int = int(config.get("max_tokens", 4096))
+        system_prompt = self._augment_system_prompt(agent)
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
@@ -56,7 +72,7 @@ class APIAgentRunner(BaseAgentRunner):
                 },
                 json={
                     "model": agent.get("model_preference", "claude-sonnet-4-6"),
-                    "system": agent.get("system_prompt", ""),
+                    "system": system_prompt,
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": max_tokens,
                 },
@@ -107,7 +123,7 @@ class CLIAgentRunner(BaseAgentRunner):
         prompt = self._build_prompt(task_description, input_context)
 
         delegation_enabled = settings.enable_agent_delegation
-        system_prompt = agent.get("system_prompt", "")
+        system_prompt = self._augment_system_prompt(agent)
         if delegation_enabled and system_prompt:
             system_prompt += self._DELEGATION_HINT
 
@@ -129,6 +145,15 @@ class CLIAgentRunner(BaseAgentRunner):
         if delegation_enabled:
             mcp_config_path = self._write_mcp_config(task_scratch_dir)
             cmd += ["--mcp-config", mcp_config_path]
+
+        memory_scope: str | None = agent.get("memory")
+        if memory_scope and memory_scope in ("user", "project", "local"):
+            memory_dir = resolve_memory_dir(
+                agent_name=agent["id"],
+                scope=memory_scope,  # type: ignore[arg-type]
+                claude_dir=settings.claude_dir,
+            )
+            cmd += ["--add-dir", memory_dir]
 
         env = {**os.environ, "PROJECT_DIR": settings.project_dir}
 
