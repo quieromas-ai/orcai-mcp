@@ -315,8 +315,8 @@ orcai-mcp migrate-to-claude [--dry-run] [--claude-dir PATH] [--db PATH] [--no-ba
 
 | Tool | Description |
 |---|---|
-| `add_agent` | Register a new sub-agent with name, role, system prompt, and model |
-| `update_agent` | Update any field on an existing agent |
+| `add_agent` | Register a new sub-agent with name, role, system prompt, model, and optional `memory` scope |
+| `update_agent` | Update any field on an existing agent, including `memory` scope |
 | `get_agents` | List agents, optionally filtered by role or status |
 | `get_active_agents` | List agents currently executing a task |
 | `delegate_task` | Assign a task to an agent; queued if agent is busy |
