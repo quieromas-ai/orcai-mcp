@@ -343,10 +343,35 @@ model: claude-sonnet-4-6
 role: backend
 runner: cli
 skills: []
+memory: project   # optional: user | project | local
 ---
 
 You are a Backend Engineer. ...
 ```
+
+Supported frontmatter fields:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | slug | Display name |
+| `description` | `''` | When to use this agent |
+| `model` | `claude-sonnet-4-6` | Model ID or alias |
+| `role` | `''` | Role label |
+| `runner` | `api` | `api` (direct API) or `cli` (Claude Code subprocess) |
+| `skills` | `[]` | Skill slugs to make available |
+| `memory` | _(none)_ | Persistent memory scope — see below |
+
+#### Persistent agent memory
+
+Set `memory` to give an agent a directory that survives across conversations. At run time the server injects the directory path and the first 200 lines / 25 KB of `MEMORY.md` into the agent's system prompt, so it can read past learnings and write new ones.
+
+| Scope | Directory | Use when |
+|-------|-----------|----------|
+| `user` | `~/.claude/agent-memory/<name>/` | Knowledge applies across all projects |
+| `project` | `{CLAUDE_DIR}/agent-memory/<name>/` | Knowledge is project-specific; commit to VCS |
+| `local` | `{CLAUDE_DIR}/agent-memory-local/<name>/` | Project-specific but not checked into VCS |
+
+The memory directory is created automatically on first use. `cli`-runner agents also receive `--add-dir` pointing at their memory directory so they can write files there.
 
 **Skill file** — `{CLAUDE_DIR}/skills/<name>/SKILL.md`
 
