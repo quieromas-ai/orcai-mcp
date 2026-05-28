@@ -171,3 +171,49 @@ async def test_install_skill_and_assign(db_path) -> None:
         assign_to=[agent["id"]],
     )
     assert agent["id"] in result["assigned_to"]
+
+
+@pytest.mark.asyncio
+async def test_add_agent_with_memory(db_path) -> None:
+    result = await add_agent(name="MemAgent", role="writer", memory="project")
+    assert result["id"] == "memagent"
+    agents = await get_agents()
+    agent = next(a for a in agents["agents"] if a["id"] == "memagent")
+    assert agent["memory"] == "project"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_memory(db_path) -> None:
+    await add_agent(name="MemUpdate", role="dev")
+    updated = await update_agent(agent="memupdate", memory="user")
+    assert updated["memory"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_memory_project(db_path) -> None:
+    await add_agent(name="MemProject", role="dev")
+    updated = await update_agent(agent="memproject", memory="project")
+    assert updated["memory"] == "project"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_memory_local(db_path) -> None:
+    await add_agent(name="MemLocal", role="dev")
+    updated = await update_agent(agent="memlocal", memory="local")
+    assert updated["memory"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_memory_persists_across_reads(db_path) -> None:
+    await add_agent(name="MemPersist", role="dev")
+    await update_agent(agent="mempersist", memory="project")
+    agents = await get_agents()
+    agent = next(a for a in agents["agents"] if a["id"] == "mempersist")
+    assert agent["memory"] == "project"
+
+
+@pytest.mark.asyncio
+async def test_update_agent_memory_none_leaves_existing(db_path) -> None:
+    await add_agent(name="MemNone", role="dev", memory="user")
+    updated = await update_agent(agent="memnone", role="writer")
+    assert updated["memory"] == "user"

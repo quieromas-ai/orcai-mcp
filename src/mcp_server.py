@@ -108,6 +108,7 @@ async def add_agent(
     system_prompt: str = "",
     model_preference: str = "claude-sonnet-4-6",
     config: dict[str, Any] | None = None,
+    memory: str | None = None,
 ) -> dict[str, Any]:
     """Register a new sub-agent by writing .claude/agents/<slug>.md.
 
@@ -118,6 +119,9 @@ async def add_agent(
         model_preference: Claude model slug (default: claude-sonnet-4-6).
         config: Optional overrides — most useful key is "runner": "cli" to use the
                 Claude Code CLI subprocess instead of the Anthropic Messages API.
+        memory: Persistent memory scope — "user", "project", or "local". When set,
+                the agent reads/writes a MEMORY.md file and receives its contents in
+                every system prompt.
 
     Returns:
         {"id", "name", "status": "idle", "created_at"}
@@ -133,6 +137,7 @@ async def add_agent(
         system_prompt=system_prompt,
         model=model_preference,
         runner=cfg.get("runner", "api"),
+        memory=memory,
     )
     return {
         "id": agent["id"], "name": agent["name"], "status": "idle",
@@ -149,6 +154,7 @@ async def update_agent(
     model_preference: str | None = None,
     status: str | None = None,
     config: dict[str, Any] | None = None,
+    memory: str | None = None,
 ) -> dict[str, Any]:
     """Update any field on an existing agent. Pass only the fields to change.
 
@@ -156,6 +162,9 @@ async def update_agent(
         agent: Slug of the agent to update (e.g. "team-leader").
         status: Valid values are "idle", "busy", or "disabled". Stored in agents_state.
         config: Merged into the existing config dict.
+        memory: Persistent memory scope — "user", "project", or "local". When set,
+                the agent reads/writes a MEMORY.md file and receives its contents in
+                every system prompt.
 
     Returns:
         Full updated agent record.
@@ -167,6 +176,7 @@ async def update_agent(
         system_prompt=system_prompt,
         model=model_preference,
         config=config,
+        memory=memory,
     )
     if status is not None:
         db = await get_db()
