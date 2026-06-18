@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     project_dir: str = "/project"
     mcp_allowed_hosts: str = ""
     enable_agent_delegation: bool = True
+    wakeup_poll_seconds: int = 30
+    wakeup_max_delay_seconds: int = 86400
 
 
 settings = Settings()

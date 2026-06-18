@@ -17,6 +17,7 @@ from src.mcp_delegate import delegate_mcp
 from src.mcp_server import mcp
 from src.rest_api import router as api_router
 from src.task_engine import task_engine
+from src.wakeup_scheduler import WakeupScheduler
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -33,11 +34,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Starting orcai-mcp server")
     db_path = os.path.join(settings.data_dir, "orcai.db")
     await init_database(db_path)
-    task_engine.start()
-    logger.info("Database and task engine initialised")
+    task_engine.start(requeue_on_start=True)
+    wakeup_scheduler = WakeupScheduler(task_engine)
+    wakeup_scheduler.start()
+    logger.info("Database, task engine, and wakeup scheduler initialised")
     async with mcp.session_manager.run(), delegate_mcp.session_manager.run():
         yield
     logger.info("Shutting down orcai-mcp server")
+    await wakeup_scheduler.stop()
     await task_engine.stop()
     await close_database()
     logger.info("Shutdown complete")

@@ -29,12 +29,37 @@ class TaskEngine:
         self._active_tasks: set[asyncio.Task[None]] = set()
         self._running = False
 
-    def start(self) -> None:
+    def start(self, requeue_on_start: bool = False) -> None:
         self._queue = asyncio.PriorityQueue()
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_agents)
         self._active_tasks = set()
         self._running = True
         self._worker_task = asyncio.create_task(self._worker())
+        if requeue_on_start:
+            asyncio.create_task(self._requeue_pending())
+
+    async def _requeue_pending(self) -> None:
+        """Restore tasks from a prior server run: reset orphaned running tasks and requeue pending."""
+        db = await get_db()
+        # Tasks stuck in 'running' from a mid-run crash will never complete — reset them.
+        await db.execute("UPDATE tasks SET status='queued' WHERE status='running'")
+        await db.commit()
+        async with db.execute(
+            "SELECT id, priority FROM tasks WHERE status='queued' ORDER BY created_at"
+        ) as cur:
+            rows = await cur.fetchall()
+        cap = settings.task_queue_size
+        for task_id, priority in rows[:cap]:
+            counter = next(_task_counter)
+            await self._queue.put((5 - priority, counter, task_id))  # type: ignore[union-attr]
+        if len(rows) > cap:
+            logger.warning(
+                "task_engine_requeue_capped: %d task(s) dropped (queue_size=%d)",
+                len(rows) - cap,
+                cap,
+            )
+        if rows:
+            logger.info("task_engine_requeued %d task(s) on startup", min(len(rows), cap))
 
     async def stop(self, drain_timeout: float = DRAIN_TIMEOUT) -> None:
         self._running = False

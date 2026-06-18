@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 AgentStatus = Literal["idle", "busy", "disabled"]
 TaskStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+WakeupStatus = Literal["pending", "fired", "cancelled"]
 AgentRunner = Literal["api", "cli"]
 MemoryScope = Literal["user", "project", "local"]
 
@@ -81,6 +82,18 @@ class SkillResponse(BaseModel):
     file_path: str
     version: str
     installed_at: str
+
+
+class WakeupRecord(BaseModel):
+    id: str
+    agent_id: str
+    prompt: str
+    reason: str | None
+    delay_seconds: int
+    wake_at: str
+    status: WakeupStatus
+    created_at: str
+    fired_at: str | None
 
 
 class DashboardStats(BaseModel):

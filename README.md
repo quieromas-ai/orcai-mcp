@@ -37,7 +37,8 @@ Anthropic API  /  Claude Code CLI subprocess
 
 ## Features
 
-- **9 MCP tools** — add, update, list, and prompt agents; delegate tasks with priority and retry; install skills; retrieve agent task logs
+- **11 MCP tools** — add, update, list, and prompt agents; delegate tasks with priority and retry; install skills; retrieve agent task logs; schedule and cancel wake-up tasks
+- **Wake-up scheduler** — agents call `schedule_wakeup` before ending a turn; the server persists the request in SQLite and re-delegates as a new task after the delay (no process needs to stay alive on the agent side)
 - **Task queue** — configurable concurrency limit and queue depth; priority ordering (1–5); exponential-backoff retries
 - **Two execution modes** — call the Anthropic API directly (`runner: api`) or spawn the Claude Code CLI as a subprocess (`runner: cli`)
 - **Shared project workspace** — CLI agents automatically receive `$PROJECT_DIR` in their environment and a `project/` symlink in their working directory pointing at the project root, enabling all agents to read and write shared files
@@ -324,6 +325,9 @@ orcai-mcp migrate-to-claude [--dry-run] [--claude-dir PATH] [--db PATH] [--no-ba
 | `get_agent_logs` | Return the last N task records for an agent as a structured activity log |
 | `install_skill` | Install a Markdown skill file and optionally assign to agents |
 | `prompt_agent` | Send an ad-hoc message to an agent and wait for a response |
+| `schedule_wakeup` | Schedule a future task for an agent after a delay (60 s – 24 h); survives server restarts |
+| `cancel_wakeup` | Cancel a pending wake-up before it fires |
+| `list_wakeups` | List scheduled wake-ups, optionally filtered by `agent` or `status` |
 
 Full parameter documentation is available via MCP resource discovery or at `/api/v1/docs`.
 
@@ -433,6 +437,8 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `PROJECT_DIR` | `.` | Project root — artifacts are written here; also exposed to CLI agents as `$PROJECT_DIR` and a `project/` symlink in each agent's workspace |
 | `MCP_ALLOWED_HOSTS` | _(empty)_ | Comma-separated allowed `Host` header values for DNS rebinding protection. Required when behind a reverse proxy — set to your public domain (e.g. `mcp.yourserver.com`). Empty disables the check. |
 | `ENABLE_AGENT_DELEGATION` | `true` | When enabled, CLI-runner agents can delegate tasks to sibling agents via a restricted MCP endpoint. |
+| `WAKEUP_POLL_SECONDS` | `30` | How often (in seconds) the server polls SQLite for due wake-ups. |
+| `WAKEUP_MAX_DELAY_SECONDS` | `86400` | Maximum delay (in seconds) accepted by `schedule_wakeup`; larger values are clamped. |
 
 ---
 
@@ -565,6 +571,42 @@ Read other agents' output from: $PROJECT_DIR/cowork-resources/
 
 ---
 
+## Wake-up scheduling
+
+Headless agents run via `claude -p` and exit after each turn — they cannot use Claude Code's built-in `ScheduleWakeup` because the process dies. `schedule_wakeup` solves this: the agent registers a future task with the long-running orcai-mcp server before its turn ends, then exits. The server wakes the agent autonomously when the delay expires.
+
+### How it works
+
+1. Agent calls `schedule_wakeup` with a delay and a self-contained prompt.
+2. orcai-mcp persists the request to SQLite (`scheduled_wakeups` table) and returns a `wakeup_id`.
+3. A background poll loop (default every 30 s) checks for due entries.
+4. When the delay expires the server inserts a new task and submits it to the task queue — the agent runs again with the wake prompt as its task description.
+5. The wakeup record transitions to `fired`; if the queue is full at fire time the record stays `pending` and retries on the next poll.
+
+### Usage
+
+```python
+# Agent calls this before ending its turn
+schedule_wakeup(
+    agent="team-leader",
+    delay_seconds=1200,          # 20 minutes; clamped to [60, 86400]
+    prompt="WAKEUP: poll the delegated build task and report status.",
+    reason="waiting for CI build",
+)
+```
+
+To cancel a pending wake-up (e.g. because the human replied first):
+
+```python
+cancel_wakeup(wakeup_id="<id returned by schedule_wakeup>")
+```
+
+### Persistence
+
+Wake-up records survive server restarts — they live in `{DATA_DIR}/orcai.db` alongside task and agent-state records. In-flight `pending` entries are picked up by the poll loop on the next restart.
+
+---
+
 ## Artifact output
 
 Task outputs are written to the project directory under the IDE target path:
@@ -685,7 +727,7 @@ cp .env.example .env
 orcai-mcp up --local
 ```
 
-The test suite covers MCP tools, task engine concurrency, graceful shutdown, retry logic, REST API, skill manager, and CLI. Tests use an in-memory SQLite database and mock the agent runner by default. The end-to-end CLI test (`test_cli_runner_end_to_end_with_system_prompt`) is automatically skipped if `claude` is not installed.
+The test suite covers MCP tools, task engine concurrency, graceful shutdown, retry logic, REST API, skill manager, CLI, and wake-up scheduler. Tests use an in-memory SQLite database and mock the agent runner by default. The end-to-end CLI test (`test_cli_runner_end_to_end_with_system_prompt`) is automatically skipped if `claude` is not installed.
 
 ### Dev container
 
@@ -726,6 +768,7 @@ Bug reports and feature requests via [GitHub Issues](https://github.com/quieroma
 - [x] Dev container scaffolding (`orcai-mcp init --devcontainer` generates `.devcontainer/`)
 - [x] Agent-to-agent delegation
 - [x] Shared project workspace (`$PROJECT_DIR` + `project/` symlink for CLI agents)
+- [x] Wake-up scheduling (`schedule_wakeup` / `cancel_wakeup` / `list_wakeups` tools + SQLite-backed poll loop)
 - [ ] Multi-model support (OpenAI, Ollama)
 - [ ] Webhook / Slack completion events
 - [ ] MCP Registry listing

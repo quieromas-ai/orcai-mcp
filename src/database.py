@@ -36,6 +36,20 @@ CREATE TABLE IF NOT EXISTS tasks (
 )
 """
 
+CREATE_SCHEDULED_WAKEUPS = """
+CREATE TABLE IF NOT EXISTS scheduled_wakeups (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    reason TEXT,
+    delay_seconds INTEGER NOT NULL,
+    wake_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    fired_at TEXT
+)
+"""
+
 
 async def init_database(db_path: str = "") -> None:
     global _db
@@ -48,6 +62,11 @@ async def init_database(db_path: str = "") -> None:
     await _db.execute("PRAGMA foreign_keys=ON")
     await _db.execute(CREATE_AGENTS_STATE)
     await _db.execute(CREATE_TASKS)
+    await _db.execute(CREATE_SCHEDULED_WAKEUPS)
+    await _db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scheduled_wakeups_poll "
+        "ON scheduled_wakeups (status, wake_at)"
+    )
     await _db.commit()
     await _migrate_remove_agents_fk(_db)
 

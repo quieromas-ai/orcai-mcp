@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from mcp.server.fastmcp import FastMCP
@@ -43,7 +43,7 @@ mcp = FastMCP(
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 async def _get_task(task_id: str) -> dict[str, Any]:
@@ -384,6 +384,126 @@ async def prompt_agent(
         "status": task_status_resp["status"],
         "error": task_status_resp.get("error"),
     }
+
+
+@mcp.tool()
+async def schedule_wakeup(
+    agent: str,
+    delay_seconds: int,
+    prompt: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Schedule a future task for an agent after a delay.
+
+    The MCP server persists the wakeup in SQLite and re-delegates it as a new
+    task when the delay expires — no process needs to stay alive on the agent side.
+
+    Args:
+        agent: Target agent slug (e.g. "team-leader").
+        delay_seconds: Seconds to wait before dispatching the task. Clamped to [60, 86400].
+        prompt: Task description sent to the agent when the wakeup fires.
+        reason: Human-readable reason logged alongside the wakeup.
+
+    Returns:
+        {"wakeup_id", "agent_id", "wake_at", "delay_seconds"}
+    """
+    try:
+        get_agent(agent)
+    except ValueError:
+        return {"error": f"Agent '{agent}' not found", "status": "rejected"}
+    clamped = max(60, min(delay_seconds, settings.wakeup_max_delay_seconds))
+    db = await get_db()
+    wakeup_id = str(uuid.uuid4())
+    now = _now()
+    wake_at = (datetime.now(UTC) + timedelta(seconds=clamped)).isoformat(timespec="microseconds")
+
+    await db.execute(
+        """
+        INSERT INTO scheduled_wakeups
+            (id, agent_id, prompt, reason, delay_seconds, wake_at, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (wakeup_id, agent, prompt, reason or None, clamped, wake_at, now),
+    )
+    await db.commit()
+    return {
+        "wakeup_id": wakeup_id,
+        "agent_id": agent,
+        "wake_at": wake_at,
+        "delay_seconds": clamped,
+        "clamped": clamped != delay_seconds,
+    }
+
+
+@mcp.tool()
+async def cancel_wakeup(wakeup_id: str) -> dict[str, Any]:
+    """Cancel a pending wakeup before it fires.
+
+    Args:
+        wakeup_id: The ID returned by schedule_wakeup.
+
+    Returns:
+        {"wakeup_id", "status": "cancelled" | "not_found" | "fired" | "already_cancelled"}
+    """
+    db = await get_db()
+    cursor = await db.execute(
+        "UPDATE scheduled_wakeups SET status='cancelled' WHERE id=? AND status='pending'",
+        (wakeup_id,),
+    )
+    await db.commit()
+
+    if cursor.rowcount > 0:
+        return {"wakeup_id": wakeup_id, "status": "cancelled"}
+
+    # Row was not pending — report its real status (or not_found).
+    async with db.execute(
+        "SELECT status FROM scheduled_wakeups WHERE id=?", (wakeup_id,)
+    ) as cur:
+        row = await cur.fetchone()
+    return {"wakeup_id": wakeup_id, "status": row[0] if row else "not_found"}
+
+
+@mcp.tool()
+async def list_wakeups(
+    agent: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """List scheduled wakeups, optionally filtered by agent slug or status.
+
+    Args:
+        agent: Filter by agent slug. Omit to list all agents.
+        status: Filter by status — "pending", "fired", or "cancelled". Omit for all.
+
+    Returns:
+        {"wakeups": [{wakeup_id, agent_id, prompt, reason, delay_seconds,
+                      wake_at, status, created_at, fired_at}], "total": int}
+    """
+    db = await get_db()
+    query = "SELECT id, agent_id, prompt, reason, delay_seconds, wake_at, status, created_at, fired_at FROM scheduled_wakeups"
+    params: list[str] = []
+    conditions: list[str] = []
+    if agent:
+        conditions.append("agent_id=?")
+        params.append(agent)
+    if status:
+        conditions.append("status=?")
+        params.append(status)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY created_at DESC"
+
+    async with db.execute(query, params) as cur:
+        rows = await cur.fetchall()
+
+    wakeups = [
+        {
+            "wakeup_id": r[0], "agent_id": r[1], "prompt": r[2], "reason": r[3],
+            "delay_seconds": r[4], "wake_at": r[5], "status": r[6],
+            "created_at": r[7], "fired_at": r[8],
+        }
+        for r in rows
+    ]
+    return {"wakeups": wakeups, "total": len(wakeups)}
 
 
 # ---------------------------------------------------------------------------
