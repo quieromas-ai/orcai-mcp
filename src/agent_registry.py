@@ -66,6 +66,9 @@ def _parse_agent_file(path: str) -> dict[str, Any]:
         "skills": fm.get("skills", []),
         "memory": memory,
         "config": {"runner": runner},
+        # Internal: discoverable by this instance only if frontmatter sets
+        # `<mcp_name>: true` (literal boolean). Absent/false/non-bool => skipped.
+        "_discoverable": fm.get(settings.mcp_name) is True,
         "created_at": _ctime_str(path),
         "updated_at": _mtime_str(path),
     }
@@ -74,15 +77,25 @@ def _parse_agent_file(path: str) -> dict[str, Any]:
 
 
 def get_agent(slug: str) -> dict[str, Any]:
-    """Load a single agent by slug, raising ValueError if not found."""
+    """Load a single agent by slug, raising ValueError if not found.
+
+    Direct fetch by slug stays permissive (ignores the discovery flag) so
+    delegate-by-slug paths keep working regardless of ownership.
+    """
     path = os.path.join(_agents_dir(), f"{slug}.md")
     if not os.path.isfile(path):
         raise ValueError(f"Agent '{slug}' not found")
-    return dict(_parse_agent_file(path))
+    agent = dict(_parse_agent_file(path))
+    agent.pop("_discoverable", None)
+    return agent
 
 
 def list_agents() -> list[dict[str, Any]]:
-    """Return all agents from .claude/agents/*.md, using mtime cache."""
+    """Return discoverable agents from .claude/agents/*.md, using mtime cache.
+
+    An agent is discoverable only if its frontmatter sets `<mcp_name>: true`
+    (settings.mcp_name). Untagged, false, or non-boolean values are skipped.
+    """
     agents_dir = _agents_dir()
     if not os.path.isdir(agents_dir):
         return []
@@ -92,10 +105,13 @@ def list_agents() -> list[dict[str, Any]]:
             continue
         path = os.path.join(agents_dir, fname)
         try:
-            agents.append(dict(_parse_agent_file(path)))
+            parsed = dict(_parse_agent_file(path))
         except Exception as exc:
             logger.warning("agent_parse_failed", extra={"path": path, "error": str(exc)})
             continue
+        if not parsed.pop("_discoverable", False):
+            continue
+        agents.append(parsed)
     return agents
 
 
@@ -112,7 +128,11 @@ def write_agent(
     memory: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Write .claude/agents/<slug>.md and return the parsed agent dict."""
+    """Write .claude/agents/<slug>.md and return the parsed agent dict.
+
+    Auto-stamps `<mcp_name>: true` so agents created through this instance are
+    discoverable by it without manual tagging.
+    """
     agents_dir = _agents_dir()
     os.makedirs(agents_dir, exist_ok=True)
     path = os.path.join(agents_dir, f"{slug}.md")
@@ -124,6 +144,7 @@ def write_agent(
         "role": role,
         "runner": runner,
         "skills": skills or [],
+        settings.mcp_name: True,
     }
     if memory is not None:
         fm["memory"] = memory

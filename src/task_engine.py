@@ -39,7 +39,7 @@ class TaskEngine:
             asyncio.create_task(self._requeue_pending())
 
     async def _requeue_pending(self) -> None:
-        """Restore tasks from a prior server run: reset orphaned running tasks and requeue pending."""
+        """Restore tasks from a prior run: reset orphaned running tasks and requeue pending."""
         db = await get_db()
         # Tasks stuck in 'running' from a mid-run crash will never complete — reset them.
         await db.execute("UPDATE tasks SET status='queued' WHERE status='running'")
@@ -47,7 +47,7 @@ class TaskEngine:
         async with db.execute(
             "SELECT id, priority FROM tasks WHERE status='queued' ORDER BY created_at"
         ) as cur:
-            rows = await cur.fetchall()
+            rows = list(await cur.fetchall())
         cap = settings.task_queue_size
         for task_id, priority in rows[:cap]:
             counter = next(_task_counter)

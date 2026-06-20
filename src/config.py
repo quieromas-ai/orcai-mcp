@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     port: int = 8100
+    # Instance identity: used as the FastMCP server name AND as the frontmatter
+    # boolean key that an agent must set to `true` to be discoverable by this instance.
+    mcp_name: str = "orcai-mcp"
     mcp_auth_token: str = ""
     mcp_auth_disabled: bool = False
     ide_target: Literal["claude", "cursor", "orcai"] = "claude"

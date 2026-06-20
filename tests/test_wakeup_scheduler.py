@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -180,7 +180,16 @@ async def test_cancel_already_fired(db_path):
             (id, agent_id, prompt, reason, delay_seconds, wake_at, status, created_at, fired_at)
         VALUES (?, ?, ?, ?, ?, ?, 'fired', ?, ?)
         """,
-        (wakeup_id, agent["id"], "Already done", "test", 60, now.isoformat(), now.isoformat(), now.isoformat()),
+        (
+            wakeup_id,
+            agent["id"],
+            "Already done",
+            "test",
+            60,
+            now.isoformat(),
+            now.isoformat(),
+            now.isoformat(),
+        ),
     )
     await db.commit()
 
@@ -434,7 +443,7 @@ async def test_list_wakeups(db_path):
 
     r1 = await schedule_wakeup(agent=agent_a["id"], delay_seconds=300, prompt="A1")
     r2 = await schedule_wakeup(agent=agent_a["id"], delay_seconds=600, prompt="A2")
-    r3 = await schedule_wakeup(agent=agent_b["id"], delay_seconds=300, prompt="B1")
+    await schedule_wakeup(agent=agent_b["id"], delay_seconds=300, prompt="B1")
 
     # Cancel one of agent_a's wakeups
     await cancel_wakeup(wakeup_id=r1["wakeup_id"])
@@ -480,7 +489,9 @@ async def test_startup_requeue(db_path, mock_api_runner):
     # Simulate a task left in 'queued' state from a prior server run
     await db.execute(
         """
-        INSERT INTO tasks (id, agent_id, description, status, priority, input_context, max_retries, created_at)
+        INSERT INTO tasks
+            (id, agent_id, description, status, priority, input_context,
+             max_retries, created_at)
         VALUES (?, ?, ?, 'queued', 3, '{}', 0, ?)
         """,
         (task_id, agent["id"], "Requeue me", now),
@@ -571,7 +582,8 @@ async def test_startup_resets_orphaned_running_tasks(db_path, mock_api_runner):
     await db.execute(
         """
         INSERT INTO tasks
-            (id, agent_id, description, status, priority, input_context, max_retries, created_at, started_at)
+            (id, agent_id, description, status, priority, input_context,
+             max_retries, created_at, started_at)
         VALUES (?, ?, ?, 'running', 3, '{}', 0, ?, ?)
         """,
         (task_id, agent["id"], "Orphaned task", now, now),
@@ -616,7 +628,7 @@ async def test_wakeup_gone_agent_cancelled(db_path):
     from src.mcp_server import add_agent
     from src.task_engine import TaskEngine
 
-    agent = await add_agent(name="GoneBot", role="dev", system_prompt="Gone.")
+    await add_agent(name="GoneBot", role="dev", system_prompt="Gone.")
     db = await get_db()
     wakeup_id = str(uuid.uuid4())
     now = datetime.now(UTC)

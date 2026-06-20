@@ -5,6 +5,7 @@ model: claude-sonnet-4-6
 role: backend
 runner: cli
 skills: []
+orcai-mcp: true
 ---
 
 # Backend Developer Agent

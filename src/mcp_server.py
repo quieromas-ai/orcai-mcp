@@ -31,7 +31,7 @@ _transport_security = TransportSecuritySettings(
 )
 
 mcp = FastMCP(
-    "orcai-mcp",
+    settings.mcp_name,
     instructions="Manage sub-agents, delegate tasks, install skills",
     transport_security=_transport_security,
 )
@@ -479,7 +479,10 @@ async def list_wakeups(
                       wake_at, status, created_at, fired_at}], "total": int}
     """
     db = await get_db()
-    query = "SELECT id, agent_id, prompt, reason, delay_seconds, wake_at, status, created_at, fired_at FROM scheduled_wakeups"
+    query = (
+        "SELECT id, agent_id, prompt, reason, delay_seconds, wake_at, status, "
+        "created_at, fired_at FROM scheduled_wakeups"
+    )
     params: list[str] = []
     conditions: list[str] = []
     if agent:

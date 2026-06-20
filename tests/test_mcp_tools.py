@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import frontmatter
 import pytest
 
 from src.mcp_server import (
@@ -37,6 +40,28 @@ async def test_get_agents(db_path) -> None:
     result = await get_agents(role="frontend")
     assert result["total"] == 1
     assert result["agents"][0]["name"] == "A"
+
+
+@pytest.mark.asyncio
+async def test_get_agents_excludes_untagged(db_path, claude_dir_path) -> None:
+    # add_agent auto-stamps the discovery flag -> discoverable
+    await add_agent(name="Mine", role="dev")
+    # a foreign (e.g. Slack-only) agent with no flag must not be discovered
+    foreign = Path(claude_dir_path) / "agents" / "foreign.md"
+    foreign.write_text(frontmatter.dumps(frontmatter.Post("body", name="foreign")))
+
+    result = await get_agents()
+    slugs = [a["id"] for a in result["agents"]]
+    assert "mine" in slugs
+    assert "foreign" not in slugs
+    assert result["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_add_agent_then_get_agents_shows_it(db_path) -> None:
+    await add_agent(name="NewOne", role="dev")
+    result = await get_agents()
+    assert "newone" in [a["id"] for a in result["agents"]]
 
 
 @pytest.mark.asyncio

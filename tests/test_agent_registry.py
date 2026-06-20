@@ -168,6 +168,87 @@ def test_list_agents_empty_dir(claude_dir_path):
 
 
 # ---------------------------------------------------------------------------
+# discovery scoping: <mcp_name>: true frontmatter flag
+# ---------------------------------------------------------------------------
+
+
+def _write_raw_agent(claude_dir_path, slug, **metadata):
+    """Write an agent .md with exact frontmatter (bypasses write_agent auto-stamp)."""
+    path = Path(claude_dir_path) / "agents" / f"{slug}.md"
+    post = frontmatter.Post("body", name=slug, **metadata)
+    path.write_text(frontmatter.dumps(post))
+    registry_module.clear_cache()
+    return path
+
+
+def test_list_agents_returns_tagged_true(claude_dir_path):
+    _write_raw_agent(claude_dir_path, "owned", **{"orcai-mcp": True})
+    assert [a["id"] for a in list_agents()] == ["owned"]
+
+
+def test_list_agents_excludes_untagged(claude_dir_path):
+    _write_raw_agent(claude_dir_path, "foreign")  # no flag (e.g. a Slack-only agent)
+    assert list_agents() == []
+
+
+def test_list_agents_excludes_tagged_false(claude_dir_path):
+    _write_raw_agent(claude_dir_path, "disabled", **{"orcai-mcp": False})
+    assert list_agents() == []
+
+
+def test_list_agents_excludes_nonbool_flag(claude_dir_path):
+    # Only the literal boolean True counts — "true"/1 must NOT pass.
+    _write_raw_agent(claude_dir_path, "stringy", **{"orcai-mcp": "true"})
+    _write_raw_agent(claude_dir_path, "numeric", **{"orcai-mcp": 1})
+    assert list_agents() == []
+
+
+def test_list_agents_mixed_returns_only_tagged_and_hides_internal_key(claude_dir_path):
+    _write_raw_agent(claude_dir_path, "mine", **{"orcai-mcp": True})
+    _write_raw_agent(claude_dir_path, "theirs")  # untagged
+    agents = list_agents()
+    assert [a["id"] for a in agents] == ["mine"]
+    assert all("_discoverable" not in a for a in agents)
+
+
+def test_write_agent_autostamps_discovery_flag(claude_dir_path):
+    write_agent("stamped", name="Stamped")
+    # on-disk frontmatter carries the flag
+    path = Path(claude_dir_path) / "agents" / "stamped.md"
+    with open(path) as f:
+        post = frontmatter.load(f)
+    assert post.metadata["orcai-mcp"] is True
+    # and the agent is consequently discoverable
+    assert "stamped" in [a["id"] for a in list_agents()]
+
+
+def test_update_agent_preserves_ownership_flag(claude_dir_path):
+    write_agent("keep", name="Keep")  # auto-stamped
+    update_agent("keep", description="changed")
+    assert "keep" in [a["id"] for a in list_agents()]
+
+
+def test_mcp_name_override_keys_discovery_per_instance(claude_dir_path, monkeypatch):
+    import src.config as cfg_module
+
+    _write_raw_agent(claude_dir_path, "orcai-agent", **{"orcai-mcp": True})
+    _write_raw_agent(claude_dir_path, "trading-agent", **{"trading-mcp": True})
+
+    monkeypatch.setattr(cfg_module.settings, "mcp_name", "trading-mcp")
+    registry_module.clear_cache()
+
+    assert [a["id"] for a in list_agents()] == ["trading-agent"]
+
+
+def test_get_agent_permissive_for_untagged(claude_dir_path):
+    # Direct fetch by slug ignores the discovery flag (delegate-by-slug path).
+    _write_raw_agent(claude_dir_path, "direct")  # untagged
+    fetched = get_agent("direct")
+    assert fetched["id"] == "direct"
+    assert "_discoverable" not in fetched
+
+
+# ---------------------------------------------------------------------------
 # mtime cache
 # ---------------------------------------------------------------------------
 

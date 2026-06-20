@@ -348,6 +348,7 @@ role: backend
 runner: cli
 skills: []
 memory: project   # optional: user | project | local
+orcai-mcp: true   # discovery flag — see "Agent discovery & scoping"
 ---
 
 You are a Backend Engineer. ...
@@ -364,6 +365,21 @@ Supported frontmatter fields:
 | `runner` | `api` | `api` (direct API) or `cli` (Claude Code subprocess) |
 | `skills` | `[]` | Skill slugs to make available |
 | `memory` | _(none)_ | Persistent memory scope — see below |
+| `<MCP_NAME>` | _(none)_ | Discovery flag — set to `true` to expose this agent to the instance named `MCP_NAME` (default `orcai-mcp`); see below |
+
+#### Agent discovery & scoping
+
+An instance discovers an agent **only** if the agent's frontmatter sets a boolean key equal to the instance's `MCP_NAME` (default `orcai-mcp`):
+
+```yaml
+orcai-mcp: true   # discovered;  absent / false / non-boolean => skipped
+```
+
+This lets several instances share one `{CLAUDE_DIR}/agents/` directory (or coexist with agents owned by other tools) without leaking each other's agents. Give each instance a distinct `MCP_NAME` and tag each agent with the owner(s) it belongs to:
+
+- `add_agent` auto-stamps `<MCP_NAME>: true`, so agents created through an instance are discoverable by it automatically.
+- Untagged agents are hidden from `get_agents` / `list_agents`. Direct fetch by slug (`delegate_task`, `prompt_agent`) is unaffected.
+- Migration: existing deployments must add `<MCP_NAME>: true` to agents they want discovered.
 
 #### Persistent agent memory
 

@@ -5,6 +5,7 @@ model: claude-sonnet-4-6
 role: frontend
 runner: cli
 skills: []
+orcai-mcp: true
 ---
 
 # Frontend Developer Agent
