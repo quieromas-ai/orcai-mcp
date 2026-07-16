@@ -187,6 +187,56 @@ async def test_get_agent_logs_not_found(db_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_agent_logs_previews_and_full(db_path) -> None:
+    """Large description/response are previewed by default; full=True returns them whole."""
+    import json
+    import uuid
+    from datetime import UTC, datetime
+
+    from src.database import get_db
+
+    agent = await add_agent(name="BigLogBot", role="worker")
+    long_desc = "d" * 5000
+    long_resp = "r" * 5000
+    db = await get_db()
+    now = datetime.now(UTC).isoformat(timespec="microseconds")
+    await db.execute(
+        """
+        INSERT INTO tasks
+            (id, agent_id, description, status, priority, input_context,
+             output, max_retries, created_at, completed_at)
+        VALUES (?, ?, ?, 'completed', 3, '{}', ?, 0, ?, ?)
+        """,
+        (str(uuid.uuid4()), agent["id"], long_desc,
+         json.dumps({"text": long_resp}), now, now),
+    )
+    await db.commit()
+
+    # Default previews both fields
+    preview = await get_agent_logs(agent=agent["id"])
+    entry = preview["logs"][0]
+    assert entry["description"] != long_desc
+    assert "chars total]" in entry["description"]
+    assert entry["response"] != long_resp
+    assert "chars total]" in entry["response"]
+
+    # full=True returns untruncated text
+    full = await get_agent_logs(agent=agent["id"], tail=1, full=True)
+    entry = full["logs"][0]
+    assert entry["description"] == long_desc
+    assert entry["response"] == long_resp
+
+
+@pytest.mark.asyncio
+async def test_get_agent_logs_default_tail(db_path) -> None:
+    """Default tail is small (10) so multi-KB records can't blow the token cap."""
+    import inspect
+
+    sig = inspect.signature(get_agent_logs)
+    assert sig.parameters["tail"].default == 10
+
+
+@pytest.mark.asyncio
 async def test_install_skill_and_assign(db_path) -> None:
     agent = await add_agent(name="FrontendDev", role="frontend")
     result = await install_skill(

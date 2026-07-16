@@ -46,6 +46,48 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+def _preview(text: str | None, limit: int = 200) -> str | None:
+    """Elide long free-text so it can't blow the MCP result token cap.
+
+    Returns the text unchanged when short; otherwise the first `limit` chars
+    plus a marker noting the original length.
+    """
+    if text is None or len(text) <= limit:
+        return text
+    return text[:limit] + f"… [{len(text)} chars total]"
+
+
+def _budget_result(result: dict[str, Any], max_chars: int = 40_000) -> dict[str, Any]:
+    """Defense-in-depth: keep a tool result under the harness token cap.
+
+    If the serialized result exceeds `max_chars`, progressively `_preview`-shrink
+    the free-text fields of each item in the first list-valued key and flag the
+    result as truncated. Any tool can wrap its return through this so a growing
+    dataset can never silently push a result over the cap again.
+    """
+    if len(json.dumps(result, default=str)) <= max_chars:
+        return result
+
+    list_key = next(
+        (k for k, v in result.items() if isinstance(v, list) and v), None
+    )
+    if list_key is None:
+        return result
+
+    text_limit = 400
+    while text_limit >= 40:
+        for item in result[list_key]:
+            if isinstance(item, dict):
+                for field, value in item.items():
+                    if isinstance(value, str):
+                        item[field] = _preview(value, text_limit)
+        result["truncated"] = True
+        if len(json.dumps(result, default=str)) <= max_chars:
+            return result
+        text_limit //= 2
+    return result
+
+
 async def _get_task(task_id: str) -> dict[str, Any]:
     db = await get_db()
     async with db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)) as cur:
@@ -71,7 +113,7 @@ async def _enrich_agents(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return agents
 
 
-async def _get_agent_logs(agent: str, tail: int) -> dict[str, Any]:
+async def _get_agent_logs(agent: str, tail: int, full: bool = False) -> dict[str, Any]:
     get_agent(agent)  # raises ValueError if not found
     tail = min(max(tail, 1), 200)
     db = await get_db()
@@ -84,16 +126,19 @@ async def _get_agent_logs(agent: str, tail: int) -> dict[str, Any]:
     for row in rows:
         task = parse_json_fields(row_to_dict(row), "output")
         output = task.get("output") or {}
+        description = task["description"]
+        response = output.get("text")
+        error = task.get("error")
         logs.append({
             "task_id": task["id"],
             "status": task["status"],
-            "description": task["description"],
-            "response": output.get("text"),
-            "error": task.get("error"),
+            "description": description if full else _preview(description),
+            "response": response if full else _preview(response),
+            "error": error if full else _preview(error),
             "started_at": task.get("started_at"),
             "completed_at": task.get("completed_at"),
         })
-    return {"agent_id": agent, "total": len(logs), "logs": logs}
+    return _budget_result({"agent_id": agent, "total": len(logs), "logs": logs})
 
 
 # ---------------------------------------------------------------------------
@@ -296,20 +341,26 @@ async def check_task_status(task_id: str) -> dict[str, Any]:
 @mcp.tool()
 async def get_agent_logs(
     agent: str,
-    tail: int = 50,
+    tail: int = 10,
+    full: bool = False,
 ) -> dict[str, Any]:
     """Return the last N task records for an agent as a structured activity log.
 
+    Task records carry multi-KB `description`/`response` text, so by default the
+    tail is small and those fields are previewed. To read one task in full, call
+    with `tail=1, full=True`.
+
     Args:
         agent: Agent slug to retrieve logs for (e.g. "devops").
-        tail: Number of most-recent entries to return (default 50, max 200).
+        tail: Number of most-recent entries to return (default 10, max 200).
+        full: Return untruncated description/response/error. Default previews them.
 
     Returns:
-        {"agent_id", "total": int,
+        {"agent_id", "total": int, "truncated": bool,
          "logs": [{"task_id", "status", "description", "response": str|null,
                    "error": str|null, "started_at", "completed_at"}]}
     """
-    return await _get_agent_logs(agent, tail)
+    return await _get_agent_logs(agent, tail, full)
 
 
 @mcp.tool()
@@ -467,23 +518,33 @@ async def cancel_wakeup(wakeup_id: str) -> dict[str, Any]:
 async def list_wakeups(
     agent: str | None = None,
     status: str | None = None,
+    limit: int = 20,
+    include_cancelled: bool = False,
+    full: bool = False,
 ) -> dict[str, Any]:
-    """List scheduled wakeups, optionally filtered by agent slug or status.
+    """List scheduled wakeups, most recent first.
 
     Args:
         agent: Filter by agent slug. Omit to list all agents.
         status: Filter by status — "pending", "fired", or "cancelled". Omit for all.
+        limit: Max rows to return (clamped 1–200, default 20).
+        include_cancelled: When no explicit status is given, cancelled wakeups are
+            excluded by default; set True to include them.
+        full: Return the untruncated `prompt` for each row. Default previews it —
+            use with a tight `limit` to read a few prompts in full.
 
     Returns:
         {"wakeups": [{wakeup_id, agent_id, prompt, reason, delay_seconds,
-                      wake_at, status, created_at, fired_at}], "total": int}
+                      wake_at, status, created_at, fired_at}],
+         "total": int, "returned": int, "truncated": bool}
     """
+    limit = min(max(limit, 1), 200)
     db = await get_db()
     query = (
         "SELECT id, agent_id, prompt, reason, delay_seconds, wake_at, status, "
         "created_at, fired_at FROM scheduled_wakeups"
     )
-    params: list[str] = []
+    params: list[Any] = []
     conditions: list[str] = []
     if agent:
         conditions.append("agent_id=?")
@@ -491,22 +552,28 @@ async def list_wakeups(
     if status:
         conditions.append("status=?")
         params.append(status)
+    elif not include_cancelled:
+        conditions.append("status != 'cancelled'")
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY created_at DESC"
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
 
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
 
     wakeups = [
         {
-            "wakeup_id": r[0], "agent_id": r[1], "prompt": r[2], "reason": r[3],
+            "wakeup_id": r[0], "agent_id": r[1],
+            "prompt": r[2] if full else _preview(r[2]),
+            "reason": r[3],
             "delay_seconds": r[4], "wake_at": r[5], "status": r[6],
             "created_at": r[7], "fired_at": r[8],
         }
         for r in rows
     ]
-    return {"wakeups": wakeups, "total": len(wakeups)}
+    result = {"wakeups": wakeups, "total": len(wakeups), "returned": len(wakeups)}
+    return _budget_result(result)
 
 
 # ---------------------------------------------------------------------------

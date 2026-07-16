@@ -448,18 +448,24 @@ async def test_list_wakeups(db_path):
     # Cancel one of agent_a's wakeups
     await cancel_wakeup(wakeup_id=r1["wakeup_id"])
 
-    # All wakeups
-    all_result = await list_wakeups()
+    # Default excludes cancelled → only the 2 pending
+    default_result = await list_wakeups()
+    assert default_result["total"] == 2
+
+    # include_cancelled surfaces the cancelled one too
+    all_result = await list_wakeups(include_cancelled=True)
     assert all_result["total"] == 3
 
-    # Filter by agent
+    # Filter by agent (default still excludes the cancelled r1)
     a_result = await list_wakeups(agent=agent_a["id"])
-    assert a_result["total"] == 2
+    assert a_result["total"] == 1
+    a_all = await list_wakeups(agent=agent_a["id"], include_cancelled=True)
+    assert a_all["total"] == 2
 
     b_result = await list_wakeups(agent=agent_b["id"])
     assert b_result["total"] == 1
 
-    # Filter by status
+    # Explicit status overrides the default cancelled-exclusion
     pending_result = await list_wakeups(status="pending")
     assert pending_result["total"] == 2
 
@@ -470,6 +476,68 @@ async def test_list_wakeups(db_path):
     a_pending = await list_wakeups(agent=agent_a["id"], status="pending")
     assert a_pending["total"] == 1
     assert a_pending["wakeups"][0]["wakeup_id"] == r2["wakeup_id"]
+
+
+@pytest.mark.asyncio
+async def test_list_wakeups_limit_and_preview(db_path):
+    """list_wakeups clamps to `limit` and previews long prompts unless full=True."""
+    from src.mcp_server import add_agent, list_wakeups, schedule_wakeup
+
+    agent = await add_agent(name="LimitBot", role="dev", system_prompt="Limit.")
+    long_prompt = "x" * 5000
+    for _ in range(5):
+        await schedule_wakeup(agent=agent["id"], delay_seconds=300, prompt=long_prompt)
+
+    limited = await list_wakeups(limit=2)
+    assert limited["total"] == 2
+    assert limited["returned"] == 2
+    # Prompt is previewed (elided) by default
+    assert limited["wakeups"][0]["prompt"] != long_prompt
+    assert "chars total]" in limited["wakeups"][0]["prompt"]
+
+    # full=True returns the untruncated prompt
+    full = await list_wakeups(limit=1, full=True)
+    assert full["wakeups"][0]["prompt"] == long_prompt
+
+
+@pytest.mark.asyncio
+async def test_prune_terminal_wakeups(db_path):
+    """_prune_terminal_wakeups deletes only old terminal rows; keeps pending + recent."""
+    from src.database import get_db
+    from src.mcp_server import add_agent
+    from src.task_engine import TaskEngine
+
+    agent = await add_agent(name="PruneBot", role="dev", system_prompt="Prune.")
+    db = await get_db()
+    now = datetime.now(UTC)
+    old = (now - timedelta(days=2)).isoformat(timespec="microseconds")
+    recent = now.isoformat(timespec="microseconds")
+
+    rows = [
+        ("old-cancelled", "cancelled", old, None),
+        ("old-fired", "fired", old, old),
+        ("recent-cancelled", "cancelled", recent, None),
+        ("old-pending", "pending", old, None),
+    ]
+    for wid, status, created, fired in rows:
+        await db.execute(
+            """
+            INSERT INTO scheduled_wakeups
+                (id, agent_id, prompt, reason, delay_seconds, wake_at, status,
+                 created_at, fired_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (wid, agent["id"], "p", "r", 60, created, status, created, fired),
+        )
+    await db.commit()
+
+    scheduler = WakeupScheduler(TaskEngine())
+    deleted = await scheduler._prune_terminal_wakeups(retention_s=86400)
+    assert deleted == 2
+
+    async with db.execute("SELECT id FROM scheduled_wakeups ORDER BY id") as cur:
+        remaining = {r[0] for r in await cur.fetchall()}
+    assert remaining == {"old-pending", "recent-cancelled"}
 
 
 @pytest.mark.asyncio

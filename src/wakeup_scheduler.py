@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,6 +14,8 @@ class WakeupScheduler:
     def __init__(self, task_engine: "TaskEngine") -> None:
         self._task_engine = task_engine
         self._poll_task: asyncio.Task[None] | None = None
+        # None → prune on the first poll tick (clears any backlog after restart).
+        self._last_prune_monotonic: float | None = None
 
     def start(self) -> None:
         from src.config import settings
@@ -33,14 +35,58 @@ class WakeupScheduler:
         logger.info("WakeupScheduler stopped")
 
     async def _poll_loop(self, interval: int) -> None:
+        from src.config import settings
         while True:
             try:
                 await asyncio.sleep(interval)
                 await self._fire_due_wakeups()
+                await self._maybe_prune(settings.wakeup_prune_interval_seconds,
+                                        settings.wakeup_retention_seconds)
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("wakeup_poll_error")
+
+    async def _maybe_prune(self, prune_interval_s: int, retention_s: int) -> None:
+        """Prune terminal wakeups at most once per `prune_interval_s`, throttled.
+
+        Guarded so a prune failure never kills the poll loop.
+        """
+        now_mono = asyncio.get_running_loop().time()
+        if (
+            self._last_prune_monotonic is not None
+            and now_mono - self._last_prune_monotonic < prune_interval_s
+        ):
+            return
+        self._last_prune_monotonic = now_mono
+        try:
+            await self._prune_terminal_wakeups(retention_s)
+        except Exception:
+            logger.exception("wakeup_prune_error")
+
+    async def _prune_terminal_wakeups(self, retention_s: int) -> int:
+        """Delete cancelled/fired wakeups older than the retention window.
+
+        Uses the fired time when present, else the created time. Returns the
+        number of rows deleted.
+        """
+        from src.database import get_db
+
+        db = await get_db()
+        cutoff = (datetime.now(UTC) - timedelta(seconds=retention_s)).isoformat(
+            timespec="microseconds"
+        )
+        cursor = await db.execute(
+            "DELETE FROM scheduled_wakeups "
+            "WHERE status IN ('cancelled', 'fired') "
+            "AND COALESCE(fired_at, created_at) < ?",
+            (cutoff,),
+        )
+        await db.commit()
+        deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info("wakeups_pruned", extra={"deleted": deleted})
+        return deleted
 
     async def _fire_due_wakeups(self) -> None:
         from src.agent_registry import get_agent

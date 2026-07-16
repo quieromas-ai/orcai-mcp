@@ -322,14 +322,24 @@ orcai-mcp migrate-to-claude [--dry-run] [--claude-dir PATH] [--db PATH] [--no-ba
 | `get_active_agents` | List agents currently executing a task |
 | `delegate_task` | Assign a task to an agent; queued if agent is busy |
 | `check_task_status` | Poll the status and output of a delegated task |
-| `get_agent_logs` | Return the last N task records for an agent as a structured activity log |
+| `get_agent_logs` | Return the last N task records for an agent (default `tail=10`, max 200). Long `description`/`response`/`error` fields are previewed to keep the result under the MCP token cap — pass `full=true` (with a small `tail`) to read one record untruncated |
 | `install_skill` | Install a Markdown skill file and optionally assign to agents |
 | `prompt_agent` | Send an ad-hoc message to an agent and wait for a response |
 | `schedule_wakeup` | Schedule a future task for an agent after a delay (60 s – 24 h); survives server restarts |
 | `cancel_wakeup` | Cancel a pending wake-up before it fires |
-| `list_wakeups` | List scheduled wake-ups, optionally filtered by `agent` or `status` |
+| `list_wakeups` | List scheduled wake-ups (default `limit=20`, max 200), newest first. Cancelled wake-ups are excluded unless `include_cancelled=true` or an explicit `status` is given; prompts are previewed unless `full=true`. Filter by `agent` or `status` |
 
 Full parameter documentation is available via MCP resource discovery or at `/api/v1/docs`.
+
+### Output bounding
+
+Read tools that echo free-text can accumulate large payloads — hundreds of scheduled wake-ups, or task records carrying multi-KB prompts and responses. A single result that exceeds the MCP client's per-result token limit is rejected outright, so `list_wakeups` and `get_agent_logs` bound their output:
+
+- **Row caps** — `list_wakeups` returns 20 rows by default, `get_agent_logs` 10; both accept an explicit limit up to 200.
+- **Field previews** — long text fields are elided to the first ~200 characters plus a `… [N chars total]` marker. Pass `full=true` to fetch a row untruncated (pair it with a small `limit`/`tail`).
+- **Result-size budget** — a backstop applied to the whole response: if it still exceeds the cap, the largest text fields are progressively shortened and the result is flagged `"truncated": true`.
+
+`list_wakeups` also excludes `cancelled` records by default (see [Retention](#retention) below), so terminal noise never dominates the payload.
 
 ---
 
@@ -455,6 +465,8 @@ All configuration is via environment variables. Copy `.env.example` to `.env` to
 | `ENABLE_AGENT_DELEGATION` | `true` | When enabled, CLI-runner agents can delegate tasks to sibling agents via a restricted MCP endpoint. |
 | `WAKEUP_POLL_SECONDS` | `30` | How often (in seconds) the server polls SQLite for due wake-ups. |
 | `WAKEUP_MAX_DELAY_SECONDS` | `86400` | Maximum delay (in seconds) accepted by `schedule_wakeup`; larger values are clamped. |
+| `WAKEUP_RETENTION_SECONDS` | `86400` | Terminal (`fired`/`cancelled`) wake-ups older than this are pruned by the poll loop, keeping `scheduled_wakeups` and `list_wakeups` bounded. |
+| `WAKEUP_PRUNE_INTERVAL_SECONDS` | `3600` | Minimum interval (in seconds) between prune passes. |
 
 ---
 
@@ -620,6 +632,10 @@ cancel_wakeup(wakeup_id="<id returned by schedule_wakeup>")
 ### Persistence
 
 Wake-up records survive server restarts — they live in `{DATA_DIR}/orcai.db` alongside task and agent-state records. In-flight `pending` entries are picked up by the poll loop on the next restart.
+
+### Retention
+
+Terminal wake-up records (`fired` and `cancelled`) are pruned automatically so the `scheduled_wakeups` table — and `list_wakeups` output — cannot grow without bound. The poll loop deletes terminal records older than `WAKEUP_RETENTION_SECONDS` (default 24 h), throttled to run at most once per `WAKEUP_PRUNE_INTERVAL_SECONDS` (default 1 h). `pending` records are never pruned. On restart, the first poll tick clears any terminal backlog left from a prior run.
 
 ---
 

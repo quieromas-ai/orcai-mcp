@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     enable_agent_delegation: bool = True
     wakeup_poll_seconds: int = 30
     wakeup_max_delay_seconds: int = 86400
+    # Terminal (cancelled/fired) wakeups older than this are pruned to stop the
+    # scheduled_wakeups table growing unbounded and bloating list_wakeups output.
+    wakeup_retention_seconds: int = 86400
+    wakeup_prune_interval_seconds: int = 3600
 
 
 settings = Settings()
