@@ -177,7 +177,8 @@ class CLIAgentRunner(BaseAgentRunner):
             raise
 
         if proc.returncode != 0:
-            raise RuntimeError(f"claude CLI exited {proc.returncode}: {stderr.decode()}")
+            detail = stderr.decode().strip() or stdout.decode().strip()
+            raise RuntimeError(f"claude CLI exited {proc.returncode}: {detail}")
         return stdout.decode(), 0
 
 
