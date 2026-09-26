@@ -139,6 +139,9 @@ class CLIAgentRunner(BaseAgentRunner):
             "--dangerously-skip-permissions",
             "--model", agent.get("model_preference", "claude-sonnet-4-6"),
         ]
+        effort: str | None = agent.get("effort")
+        if effort:
+            cmd += ["--effort", effort]
         if system_prompt_path:
             cmd += ["--system-prompt-file", system_prompt_path]
 

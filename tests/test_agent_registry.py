@@ -365,6 +365,26 @@ def test_invalid_memory_scope_returns_none(claude_dir_path, caplog):
     assert any("agent_invalid_memory_scope" in r.message for r in caplog.records)
 
 
+def test_effort_read_from_frontmatter(claude_dir_path):
+    agent = write_agent("eff-agent", name="Eff Agent", extra={"effort": "xhigh"})
+    assert agent["effort"] == "xhigh"
+
+
+def test_no_effort_defaults_none(claude_dir_path):
+    agent = write_agent("no-eff", name="No Eff")
+    assert agent["effort"] is None
+
+
+def test_invalid_effort_returns_none(claude_dir_path, caplog):
+    path = Path(claude_dir_path) / "agents" / "bad-eff.md"
+    post = frontmatter.Post("content", name="bad-eff", effort="turbo")
+    path.write_text(frontmatter.dumps(post))
+    with caplog.at_level("WARNING", logger="src.agent_registry"):
+        agent = get_agent("bad-eff")
+    assert agent["effort"] is None
+    assert any("agent_invalid_effort" in r.message for r in caplog.records)
+
+
 def test_get_agent_roundtrip_includes_memory(claude_dir_path):
     write_agent("rt-mem", name="RT Mem", memory="user")
     fetched = get_agent("rt-mem")

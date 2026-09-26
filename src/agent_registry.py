@@ -10,6 +10,9 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Values accepted by `claude --effort`.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 # Per-file mtime cache: {path: (mtime, agent_dict)}
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -54,6 +57,13 @@ def _parse_agent_file(path: str) -> dict[str, Any]:
             "agent_invalid_memory_scope",
             extra={"path": path, "memory": memory_raw},
         )
+    effort_raw = fm.get("effort", None)
+    effort: str | None = effort_raw if effort_raw in EFFORT_LEVELS else None
+    if effort_raw is not None and effort is None:
+        logger.warning(
+            "agent_invalid_effort",
+            extra={"path": path, "effort": effort_raw},
+        )
     agent: dict[str, Any] = {
         "id": slug,
         "name": fm.get("name", slug),
@@ -65,6 +75,7 @@ def _parse_agent_file(path: str) -> dict[str, Any]:
         "runner": runner,
         "skills": fm.get("skills", []),
         "memory": memory,
+        "effort": effort,
         "config": {"runner": runner},
         # Internal: discoverable by this instance only if frontmatter sets
         # `<mcp_name>: true` (literal boolean). Absent/false/non-bool => skipped.

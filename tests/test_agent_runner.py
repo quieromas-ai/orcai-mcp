@@ -127,6 +127,29 @@ class TestCLIAgentRunner:
         assert "--add-dir" not in cmd
 
     @pytest.mark.asyncio
+    async def test_effort_adds_effort_flag(self, scratch_dir, project_dir, agent):
+        agent["effort"] = "medium"
+        mock_exec = AsyncMock(return_value=_fake_process())
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
+             patch("src.agent_runner.settings.enable_agent_delegation", False):
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
+
+        cmd = list(mock_exec.call_args.args)
+        assert cmd[cmd.index("--effort") + 1] == "medium"
+
+    @pytest.mark.asyncio
+    async def test_no_effort_no_effort_flag(self, scratch_dir, project_dir, agent):
+        mock_exec = AsyncMock(return_value=_fake_process())
+        with patch("asyncio.create_subprocess_exec", mock_exec), \
+             patch("src.agent_runner.settings.project_dir", project_dir), \
+             patch("src.agent_runner.settings.enable_agent_delegation", False):
+            await CLIAgentRunner().run(agent, "task", {}, scratch_dir)
+
+        cmd = list(mock_exec.call_args.args)
+        assert "--effort" not in cmd
+
+    @pytest.mark.asyncio
     async def test_memory_injects_instructions_into_system_prompt(
         self, scratch_dir, project_dir, agent, tmp_path
     ):
